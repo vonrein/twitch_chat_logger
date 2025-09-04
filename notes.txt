@@ -1,0 +1,53 @@
+cargo run --target-dir /tmp/rust_builds
+
+cargo clean --target-dir /tmp/rust_builds
+
+cargo install --path . --target-dir /tmp/rust_builds
+
+
+==forking the twitch-irc==
+
+https://chatgpt.com/c/6850a993-aea4-8006-88c6-59afdd1989a8
+
+cp -r twitch-irc twitch_irc_local
+
+========================================================
+
+Step 3: Tell Cargo to use your local version
+
+In your Cargo.toml, replace:
+
+twitch-irc = "5.0.1"
+
+with:
+
+[dependencies]
+twitch-irc = { path = "twitch_irc_local" }
+
+
+File:
+
+src/connection/event_loop.rs
+
+Current code snippet (relevant part):
+
+if let Some(token) = credentials.token {
+    new_state.send_message(irc!["PASS", format!("oauth:{}", token)], None);
+}
+new_state.send_message(irc!["NICK", credentials.login], None);
+
+✅ What to Add
+
+Immediately after those two lines, insert the capability request:
+
+new_state.send_message(irc!["CAP", "REQ", "twitch.tv/membership"], None);
+
+So the block should look like this after editing:
+
+if let Some(token) = credentials.token {
+    new_state.send_message(irc!["PASS", format!("oauth:{}", token)], None);
+}
+new_state.send_message(irc!["NICK", credentials.login], None);
+
+// ✅ Request JOIN/PART support (membership capability)
+new_state.send_message(irc!["CAP", "REQ", "twitch.tv/membership"], None);

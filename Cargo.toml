@@ -1,0 +1,21 @@
+[package]
+name = "twitch_chat_logger"
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+twitch-irc = { path = "twitch-irc_local" }
+anyhow = "1"
+owo-colors = "4"
+rustyline = "17"
+notify-rust = "4"
+
+chrono = "0.4"
+clap = { version = "4.4", features = ["derive"] }
+once_cell = "1.19"
+[target.'cfg(unix)'.dependencies]
+rodio = { version = "=0.20" }
+chrono-tz = "0.10"
+

@@ -1,0 +1,150 @@
+use std::{collections::HashMap, sync::{Arc, Mutex}};
+use std::env;
+use twitch_irc::login::StaticLoginCredentials;
+use twitch_irc::message::ServerMessage;
+use twitch_irc::{ClientConfig, SecureTCPTransport, TwitchIRCClient};
+use owo_colors::OwoColorize;
+use rustyline::Editor;
+use rustyline::history::DefaultHistory;
+use anyhow::Result;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let args: Vec<String> = env::args().skip(1).collect();
+    let initial_channels: Vec<String> = if args.is_empty() {
+        vec![
+            "janistantv", "shellingford92", "coder2k", "gyrosgeier", "cirdan77", "markomonxd",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
+    } else {
+        args
+    };
+
+    let config = ClientConfig::default();
+    let (mut incoming_messages, client) =
+        TwitchIRCClient::<SecureTCPTransport, StaticLoginCredentials>::new(config);
+
+    let running = Arc::new(Mutex::new(true));
+    let channels = Arc::new(Mutex::new(initial_channels.clone()));
+    let logs = Arc::new(Mutex::new(HashMap::<String, Vec<String>>::new()));
+
+    for channel in &initial_channels {
+        let _ = client.join(channel.clone());
+    }
+
+    let running_clone = Arc::clone(&running);
+    let logs_for_tokio = Arc::clone(&logs);
+    let client_clone = client.clone();
+
+    let join_handle = tokio::spawn(async move {
+        while *running_clone.lock().unwrap() {
+            if let Some(message) = incoming_messages.recv().await {
+                if let ServerMessage::Privmsg(msg) = message {
+                    let username = &msg.sender.name;
+                    let text = &msg.message_text;
+
+                    let badges = if !msg.badges.is_empty() {
+                        msg.badges.iter()
+                            .map(|b| format!("{} ({})", b.name, b.version))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    } else {
+                        String::from("no badges")
+                    };
+
+                    {
+                        let mut logs = logs_for_tokio.lock().unwrap();
+                        logs.entry(msg.channel_login.clone())
+                            .or_default()
+                            .push(format!("[{}] {}: {}", badges, username, text));
+                    }
+
+                    if let Some(color) = msg.name_color {
+                        println!(
+                            "[{}] [{}] {}: {}",
+                            msg.channel_login,
+                            badges,
+                            username.truecolor(color.r, color.g, color.b),
+                            text
+                        );
+                    } else {
+                        println!("[{}] [{}] {}: {}", msg.channel_login, badges, username, text);
+                    }
+                }
+            }
+        }
+    });
+
+    let logs_for_thread = Arc::clone(&logs);
+    let running_for_thread = Arc::clone(&running);
+    let channels_for_thread = Arc::clone(&channels);
+    let handle = std::thread::spawn(move || {
+        let mut rl = Editor::<(), DefaultHistory>::new().unwrap();
+
+        println!("Commands: JOIN <channel>, PART <channel>, SAVE <channel|ALL>, EXIT");
+
+        loop {
+            match rl.readline("> ") {
+                Ok(line) => {
+                    let parts: Vec<&str> = line.trim().split_whitespace().collect();
+                    if parts.is_empty() {
+                        continue;
+                    }
+                    let cmd = parts[0].to_uppercase();
+                    let arg = parts.get(1).map(|s| s.to_string());
+
+                    match cmd.as_str() {
+                        "JOIN" => {
+                            if let Some(channel) = arg {
+                                let _ = client_clone.join(channel.clone());
+                                channels_for_thread.lock().unwrap().push(channel);
+                            } else {
+                                println!("Usage: JOIN <channel>");
+                            }
+                        }
+                        "PART" => {
+                            if let Some(channel) = arg {
+                                let _ = client_clone.part(channel.clone());
+                                channels_for_thread.lock().unwrap().retain(|c| c != &channel);
+                            }
+                        }
+                        "SAVE" => {
+                            if let Some(channel) = arg {
+                                let logs = logs_for_thread.lock().unwrap();
+                                if channel.to_uppercase() == "ALL" {
+                                    for (chan, messages) in logs.iter() {
+                                        std::fs::write(format!("/tmp/{}_log.txt", chan), messages.join("\n"))
+                                            .unwrap();
+                                        println!("Saved {} messages to {}_log.txt", messages.len(), chan);
+                                    }
+                                } else if let Some(messages) = logs.get(&channel) {
+                                    std::fs::write(format!("/tmp/{}_log.txt", channel), messages.join("\n"))
+                                        .unwrap();
+                                    println!("Saved {} messages to {}_log.txt", messages.len(), channel);
+                                } else {
+                                    println!("No messages found for '{}'.", channel);
+                                }
+                            }
+                        }
+                        "EXIT" => {
+                            println!("Shutting down...");
+                            *running_for_thread.lock().unwrap() = false;
+                            break;
+                        }
+                        _ => {
+                            println!("Unknown command: {}", cmd);
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    handle.join().unwrap();
+    join_handle.await.unwrap();
+
+    Ok(())
+}
