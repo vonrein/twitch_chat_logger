@@ -109,9 +109,9 @@ async fn main() -> Result<()> {
 
     // --- Shared State ---
     let channels        = Arc::new(Mutex::new(initial_channels.clone()));
-    let logs                = Arc::new(Mutex::new(HashMap::<String, Vec<String>>::new()));
+    let logs            = Arc::new(Mutex::new(HashMap::<String, Vec<String>>::new()));
     let join_logs       = Arc::new(Mutex::new(HashMap::<String, Vec<String>>::new()));
-    let sound_channels = Arc::new(Mutex::new(
+    let sound_channels  = Arc::new(Mutex::new(
         initial_channels.iter().cloned().collect::<HashSet<String>>(),
     ));
 
@@ -275,7 +275,6 @@ async fn main() -> Result<()> {
         println!("Commands: JOIN/PART <channel>, SOUND <channel>, SAVE <channel|ALL>, EXIT");
 
         loop {
-            // ... the rest of the loop remains the same
             match rl.readline(">> ") {
                 Ok(input) => {
                     let _ = rl.add_history_entry(input.as_str());
@@ -291,7 +290,6 @@ async fn main() -> Result<()> {
                         "JOIN" => {
                             if let Some(channel) = arg {
                                 let _ = client_for_thread.join(channel.clone());
-                                // This lock updates the list that the completer will read from.
                                 channels_for_thread.lock().unwrap().push(channel.clone());
                                 println!("Joined {}", channel.green());
                             }
@@ -299,7 +297,6 @@ async fn main() -> Result<()> {
                         "PART" => {
                             if let Some(channel) = arg {
                                 let _ = client_for_thread.part(channel.clone());
-                                // The completer will now see the updated list without this channel.
                                 channels_for_thread.lock().unwrap().retain(|c| c != &channel);
                                 println!("Parted from {}", channel.red());
                             }
@@ -312,9 +309,8 @@ async fn main() -> Result<()> {
                                     println!("Sound OFF for {}", channel.yellow());
                                 } else {
                                     sound_chans.insert(channel.clone());
-                                    // ---- Add this line to make it exclusive ----
                                     notification_channels_for_thread.lock().unwrap().remove(&channel);
-                                    println!("Sound ON for {} (Notifications are now OFF)", channel.green());
+                                    println!("Sound ON for {}", channel.green());
                                 }
                             }
                         },
@@ -341,7 +337,6 @@ async fn main() -> Result<()> {
                                 } else {
                                     None
                                 };
-                                // The call is now simpler
                                 save_logs(
                                     target,
                                     &logs_for_thread,
@@ -383,7 +378,6 @@ async fn main() -> Result<()> {
         eprintln!("Error in input thread: {:?}", e);
     }
 
-    // Wait for the message task to complete (usually only after exit signal)
     join_handle.await?;
 
     Ok(())
