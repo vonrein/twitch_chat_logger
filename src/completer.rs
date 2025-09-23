@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 /// The completer now holds shared references to the application's dynamic state.
 pub struct CommandCompleter {
     pub commands: Vec<String>,
+    pub waveforms: Vec<String>, // <-- 1. ADD THIS FIELD
     pub joined_channels: Arc<Mutex<Vec<String>>>,
     pub vips: Vec<String>,
     pub log_channels: Arc<Mutex<HashMap<String, Vec<String>>>>,
@@ -54,7 +55,8 @@ impl CommandCompleter {
 
         // Case 1: User is typing the command name.
         if words.len() == 1 && !line.ends_with(' ') {
-            let matches: Vec<String> = self.commands
+            let matches: Vec<String> = self
+            .commands
             .iter()
             .filter(|cmd| cmd.starts_with(&words[0].to_uppercase()))
             .cloned()
@@ -66,6 +68,7 @@ impl CommandCompleter {
         let command = words[0].to_uppercase();
 
         let potential_args = match command.as_str() {
+            "WAVE" => self.waveforms.clone(), // <-- 2. ADD THIS MATCH ARM
             "PART" => self.joined_channels.lock().unwrap().clone(),
             "JOIN" => self.vips.clone(),
             "SOUND" | "NOTIFY" => {
@@ -76,15 +79,6 @@ impl CommandCompleter {
                 combined.sort_unstable();
                 combined.dedup();
                 combined
-                /* //before gemini change
-                let log_keys: Vec<String> = self.log_channels.lock().unwrap().keys().cloned().collect();
-                let mut combined = log_keys;
-                combined.sort();
-                combined.extend(self.vips.clone());
-
-                combined.dedup();
-                combined
-                */
             }
             "SAVE" => self.log_channels.lock().unwrap().keys().cloned().collect(),
             _ => Vec::new(),

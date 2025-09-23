@@ -29,16 +29,42 @@ mod channel_config; // declares the module
 use channel_config::{ChannelConfig, load_channel_config, apply_named_color};
 
 mod sound;
-use sound::play_sound;
+use sound::{play_sound, WaveformType, SOUND_CONTROLLER};
+use home;
+
 
 
 static CONFIG: Lazy<ChannelConfig> = Lazy::new(|| {
-    match load_channel_config("/home/steve/.rustTwitchLogger/channels.txt") {
-        Ok(cfg) => cfg,
-    Err(e) => {
-        eprintln!("⚠️ Warning: Failed to load channels.txt: {e}");
+    let config_path = match home::home_dir() {
+        Some(mut path) => {
+            path.push(".rustTwitchLogger/channels.txt");
+            path
+        }
+        None => {
+            eprintln!("⚠️ Error: Unable to find the home directory to load channels.txt.");
+            process::exit(1);
+        }
+    };
+
+    // Convert the PathBuf to a &str, handling the possibility of an error.
+    if let Some(path_str) = config_path.to_str() {
+        match load_channel_config(path_str) { // <-- Now passing a valid &str
+            Ok(cfg) => cfg,
+                                               Err(e) => {
+                                                   eprintln!(
+                                                       "⚠️ Error: Failed to load configuration from '{}': {}",
+                                                       config_path.display(),
+                                                             e
+                                                   );
+                                                   process::exit(1);
+                                               }
+        }
+    } else {
+        eprintln!(
+            "⚠️ Error: The configuration path '{}' is not valid UTF-8.",
+            config_path.display()
+        );
         process::exit(1);
-    }
     }
 });
 
@@ -72,19 +98,24 @@ fn get_local_timestamp() -> String {
     )
 }
 
-use notify_rust::Notification;
+use notify_rust::{Notification, Timeout};
 
-// This can be your new, efficient notification function!
-fn send_desktop_notification(summary: &str, body: &str) {
-    if let Err(e) = Notification::new()
-        .summary(summary) // Set the title
-        .body(body)       // Set the message content
-        .show()           // Display the notification
-        {
-            eprintln!("⚠️ Failed to send notification: {}", e);
-        }
+const DEFAULT_TIMEOUT: Option<u32> = Some(12000);
+
+fn send_desktop_notification(summary: &str, body: &str, timeout_ms: Option<u32>) {
+    let mut notification = Notification::new();
+    notification.summary(summary).body(body);
+
+    if let Some(ms) = timeout_ms {
+        // Set a custom timeout in milliseconds
+        notification.timeout(Timeout::Milliseconds(ms));
+    }
+    // If timeout_ms is None, the notification server's default timeout will be used.
+
+    if let Err(e) = notification.show() {
+        eprintln!("⚠️ Failed to send notification: {}", e);
+    }
 }
-
 // --- Main Application Logic ---
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -260,10 +291,20 @@ async fn main() -> Result<()> {
                                     "RECONNECT".into(),
                                     "PAUSES".into(),
                                     "STATS".into(),
+                                    "FREQ".into(),
+                                    "WAVE".into()
+        ];
+
+        let waveforms = vec![
+            "SQUARE".into(),
+                                    "SINE".into(),
+                                    "SAWTOOTH".into(),
+                                    "TRIANGLE".into(),
         ];
 
         let completer = CommandCompleter {
             commands: commands.clone(),
+                                    waveforms: waveforms.clone(), // <-- Add this line
                                     joined_channels: Arc::clone(&channels_for_thread),
                                     vips: vips.clone(),
                                     log_channels: Arc::clone(&logs_for_thread),
@@ -272,7 +313,7 @@ async fn main() -> Result<()> {
         let mut rl = Editor::<CommandCompleter, DefaultHistory>::new()?;
         rl.set_helper(Some(completer));
 
-        println!("Commands: JOIN/PART <channel>, SOUND <channel>, SAVE <channel|ALL>, EXIT");
+        println!("Commands: JOIN, PART, SOUND, FREQ <hz>, WAVE <type>, SAVE, EXIT");
 
         loop {
             match rl.readline(">> ") {
@@ -347,6 +388,53 @@ async fn main() -> Result<()> {
                                 println!("Usage: SAVE <channel|ALL> [optional_custom_name]");
                             }
                         },
+                        "FREQ" => {
+                            if let Some(freq_str) = arg {
+                                match freq_str.parse::<f32>() {
+                                    Ok(new_freq) => {
+                                        // Lock the mutex and update the value
+                                        let mut freq = SOUND_CONTROLLER.frequency.lock().unwrap();
+                                        *freq = new_freq;
+                                        println!("Sound frequency set to {} Hz", new_freq.cyan());
+                                    }
+                                    Err(_) => {
+                                        println!("'{}' is not a valid frequency.", freq_str.red());
+                                    }
+                                }
+                            } else {
+                                // Print the current frequency if no argument is given
+                                let current_freq = *SOUND_CONTROLLER.frequency.lock().unwrap();
+                                println!("Current sound frequency is {} Hz", current_freq.cyan());
+                            }
+                        },
+                        "WAVE" => {
+                            // Check if an argument was provided
+                            if let Some(wave_arg) = arg {
+                                // Convert the argument to uppercase before matching
+                                let new_wave = match wave_arg.to_uppercase().as_str() {
+                                    "SQUARE" => Some(WaveformType::Square),
+                                    "SINE" => Some(WaveformType::Sine),
+                                    "SAWTOOTH" => Some(WaveformType::Sawtooth),
+                                    "TRIANGLE" => Some(WaveformType::Triangle),
+                                    _ => None, // The input didn't match any known type
+                                };
+
+                                if let Some(wave) = new_wave {
+                                    *SOUND_CONTROLLER.waveform.lock().unwrap() = wave;
+                                    println!("Sound waveform set to {:?}", wave.cyan());
+                                } else {
+                                    // Give a more specific error message if the input was invalid
+                                    println!("Unknown waveform: '{}'. Use SQUARE, SINE, SAWTOOTH, or TRIANGLE.", wave_arg.red());
+                                }
+                            } else {
+                                // No argument was given, print the current state
+                                let current_wave = *SOUND_CONTROLLER.waveform.lock().unwrap();
+                                println!(
+                                    "Usage: WAVE <type>. Current waveform is: {:?}",
+                                    current_wave.cyan()
+                                );
+                            }
+                        },
                         "EXIT" => {
                             println!("Shutting down...");
                             let joined_channels = channels_for_thread.lock().unwrap().clone();
@@ -356,7 +444,7 @@ async fn main() -> Result<()> {
                             }
                             let _ = exit_tx.send(()); // notify the async task
                             break;
-                        }
+                        },
                         _ => println!("{}: '{}'", "Unknown command".red(), input.trim()),
                     }
                 }
@@ -488,14 +576,32 @@ fn handle_privmsg(
     let summary = format!("#{}", msg.channel_login);
     let body = format!("{}: {}", msg.sender.name, msg.message_text);
 
+    let calculate_timeout = || -> Option<u32> {
+        const BASE_TIMEOUT_MS: u32 = 3000; // 3 seconds base time
+        const MAX_TIMEOUT_MS: u32 = 20000; // 20 seconds max time
+        const WORDS_PER_MINUTE: f64 = 180.0; // Slower reading speed for comfort
+
+        let word_count = msg.message_text.split_whitespace().count();
+        if word_count == 0 {
+            return Some(BASE_TIMEOUT_MS);
+        }
+
+        // Calculate reading time in milliseconds
+        // (word_count / WPM) -> minutes | * 60 -> seconds | * 1000 -> milliseconds
+        let reading_time_ms = ((word_count as f64 / WORDS_PER_MINUTE) * 60.0 * 1000.0) as u32;
+
+        let total_timeout = (BASE_TIMEOUT_MS + reading_time_ms).min(MAX_TIMEOUT_MS);
+        Some(total_timeout)
+    };
+
 
     if sound_channels.lock().unwrap().contains(&msg.channel_login) {
 
-        send_desktop_notification(&summary, &body);
+        send_desktop_notification(&summary, &body, calculate_timeout());
         play_sound();
     }else if notification_channels.lock().unwrap().contains(&msg.channel_login) {
         // Notify mode: only sends a notification
-        send_desktop_notification(&summary, &body);
+        send_desktop_notification(&summary, &body, calculate_timeout());
     }
 }
 
@@ -570,7 +676,7 @@ fn handle_moderation_event(
 
     let summary = format!("Moderation in #{}", channel);
     let body = format!("[{}] {}", event_type, content);
-    send_desktop_notification(&summary, &body);
+    send_desktop_notification(&summary, &body, Some(40000));
     play_sound();
 
 
@@ -609,7 +715,7 @@ fn handle_join_or_part(
 
          if event_type == "JOIN" && username != channel {
              play_sound();
-             send_desktop_notification(channel, &format!("{} joined",username));
+             send_desktop_notification(channel, &format!("{} joined",username), Some(4000));
          }
      }
 }
