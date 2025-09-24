@@ -18,6 +18,7 @@ use std::{
     sync::{Arc, Mutex},
     process,
     process::Command,
+    time::{Duration, Instant},
 };
 use twitch_irc::login::StaticLoginCredentials;
 use twitch_irc::message::{PrivmsgMessage, ServerMessage};
@@ -103,24 +104,57 @@ use notify_rust::{Notification, Timeout};
 const DEFAULT_TIMEOUT: Option<u32> = Some(12000);
 
 fn send_desktop_notification(summary: &str, body: &str, timeout_ms: Option<u32>) {
-    let mut notification = Notification::new();
-    notification.summary(summary).body(body);
+    // Use the provided timeout, or fall back to the global default.
+    let calculated_timeout = timeout_ms.or(DEFAULT_TIMEOUT).unwrap_or(5000); // 5s absolute fallback
 
-    if let Some(ms) = timeout_ms {
-        // Set a custom timeout in milliseconds
-        notification.timeout(Timeout::Milliseconds(ms));
+    let final_timeout;
+    {
+        let mut state = NOTIFICATION_STATE.lock().unwrap();
+
+        // Check if the last notification is still considered "active"
+        if state.last_shown.elapsed() < Duration::from_millis(state.last_duration_ms as u64) {
+            // If so, the new notification must last for at least as long as the previous one.
+            final_timeout = calculated_timeout.max(state.last_duration_ms);
+        } else {
+            // Otherwise, just use its own calculated timeout.
+            final_timeout = calculated_timeout;
+        }
+
+        // Update the state for the *next* notification that will come in.
+        state.last_duration_ms = final_timeout;
+        state.last_shown = Instant::now();
     }
-    // If timeout_ms is None, the notification server's default timeout will be used.
+
+    // Now, build and show the notification with the adjusted timeout.
+    let mut notification = Notification::new();
+    notification
+    .summary(summary)
+    .body(body)
+    .timeout(Timeout::Milliseconds(final_timeout));
 
     if let Err(e) = notification.show() {
         eprintln!("⚠️ Failed to send notification: {}", e);
     }
 }
+
+static NOTIFICATION_STATE: Lazy<Mutex<NotificationState>> = Lazy::new(|| {
+    Mutex::new(NotificationState {
+        // Initialize to the distant past so the first notification isn't affected
+        last_shown: Instant::now() - Duration::from_secs(999),
+               last_duration_ms: 0,
+    })
+});
+
+struct NotificationState {
+    last_shown: Instant,
+    last_duration_ms: u32,
+}
+
 // --- Main Application Logic ---
 #[tokio::main]
 async fn main() -> Result<()> {
 
-    println!("last update: 14.08.25");
+    println!("last update: 24.09.25");
 
     use tokio::sync::oneshot;
     let cli = Cli::parse();
