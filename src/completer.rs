@@ -24,14 +24,34 @@ impl Completer for CommandCompleter {
         _pos: usize,
         _ctx: &Context<'_>,
     ) -> Result<(usize, Vec<Pair>), rustyline::error::ReadlineError> {
+        // --- START: Added Logic ---
+        let trimmed = line.trim_start();
+        let words: Vec<&str> = trimmed.split_whitespace().collect();
+
+        // This is true only when we are completing the first word (the command itself).
+        let is_command_completion = words.len() <= 1 && !line.ends_with(' ');
+        // --- END: Added Logic ---
+
         let (start, completions) = self.dynamic_complete(line);
+
         let pairs: Vec<Pair> = completions
         .into_iter()
-        .map(|comp| Pair {
-            display: comp.clone(),
-             replacement: comp,
+        .map(|comp| {
+            // If it's a command, add a space to the replacement.
+            // Otherwise, use the completion as-is.
+            let replacement = if is_command_completion {
+                format!("{} ", comp)
+            } else {
+                comp.clone()
+            };
+
+            Pair {
+                display: comp, // Always display without the extra space
+                replacement,   // Only replace with the extra space for commands
+            }
         })
         .collect();
+
         Ok((start, pairs))
     }
 }
@@ -71,7 +91,7 @@ impl CommandCompleter {
             "WAVE" => self.waveforms.clone(), // <-- 2. ADD THIS MATCH ARM
             "PART" => self.joined_channels.lock().unwrap().clone(),
             "JOIN" => self.vips.clone(),
-            "SOUND" | "NOTIFY" => {
+            "SOUND" | "NOTIFY"| "TITLE" | "MSGLOGGING" => {
                 let log_keys: Vec<String> = self.log_channels.lock().unwrap().keys().cloned().collect();
                 let mut combined = self.joined_channels.lock().unwrap().clone();
                 combined.extend(log_keys);

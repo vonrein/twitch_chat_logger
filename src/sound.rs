@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use once_cell::sync::Lazy;
+use crate::globals::IS_SERVER_MODE;
 use home;
 
 // Step 1: Create an enum to represent the waveform choice.
@@ -26,6 +27,11 @@ pub struct SoundController {
 pub static SOUND_CONTROLLER: Lazy<SoundController> = Lazy::new(start_sound_thread);
 
 pub fn play_sound() {
+
+    if *IS_SERVER_MODE.lock().unwrap() {
+        return;
+    }
+
     if let Err(e) = SOUND_CONTROLLER.tx.send(()) {
         eprintln!("Failed to send sound trigger: {}", e);
     }
