@@ -7,8 +7,8 @@ use crate::client::event_loop::{ClientLoopCommand, ClientLoopWorker};
 use crate::config::ClientConfig;
 use crate::error::Error;
 use crate::login::LoginCredentials;
-use crate::message::commands::ServerMessage;
 use crate::message::IRCTags;
+use crate::message::commands::ServerMessage;
 use crate::message::{IRCMessage, ReplyToMessage};
 #[cfg(feature = "metrics-collection")]
 use crate::metrics::MetricsBundle;
@@ -17,7 +17,6 @@ use crate::validate::validate_login;
 use crate::{irc, validate};
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
 /// A send-only handle to control the Twitch IRC Client.
@@ -97,7 +96,7 @@ impl<T: Transport, L: LoginCredentials> TwitchIRCClient<T, L> {
             })
             .unwrap();
         // unwrap: ClientLoopWorker should not die before all sender handles have been dropped
-        return_rx.await.unwrap()
+        return_rx.await.unwrap();
     }
 
     /// Send an arbitrary IRC message to one of the connections in the connection pool.
@@ -137,7 +136,7 @@ impl<T: Transport, L: LoginCredentials> TwitchIRCClient<T, L> {
     /// it will not be cut short or split into multiple messages (what happens is determined
     /// by the behaviour of the Twitch IRC server).
     pub async fn say(&self, channel_login: String, message: String) -> Result<(), Error<T, L>> {
-        self.privmsg(channel_login, format!(". {}", message)).await
+        self.privmsg(channel_login, format!(". {message}")).await
     }
 
     /// Say a `/me` chat message in the given Twitch channel. These messages are usually
@@ -162,8 +161,7 @@ impl<T: Transport, L: LoginCredentials> TwitchIRCClient<T, L> {
     /// it will not be cut short or split into multiple messages (what happens is determined
     /// by the behaviour of the Twitch IRC server).
     pub async fn me(&self, channel_login: String, message: String) -> Result<(), Error<T, L>> {
-        self.privmsg(channel_login, format!("/me {}", message))
-            .await
+        self.privmsg(channel_login, format!("/me {message}")).await
     }
 
     /// Reply to a given message. The sent message is tagged to be in reply of the
@@ -242,7 +240,7 @@ impl<T: Transport, L: LoginCredentials> TwitchIRCClient<T, L> {
         let mut tags = IRCTags::new();
         tags.0.insert(
             "reply-parent-msg-id".to_owned(),
-            Some(reply_to.message_id().to_owned()),
+            reply_to.message_id().to_owned(),
         );
 
         let irc_message = IRCMessage::new(
@@ -255,94 +253,6 @@ impl<T: Transport, L: LoginCredentials> TwitchIRCClient<T, L> {
             ], // The prefixed "." prevents commands from being executed if not in /me-mode
         );
         self.send_message(irc_message).await
-    }
-
-    /// Ban a user with an optional reason from the given Twitch channel.
-    ///
-    /// Note that this will not throw an error if the target user is already banned, doesn't exist
-    /// or if the logged-in user does not have the required permission to ban the user. An error
-    /// is only returned if something prevented the command from being sent over the wire.
-    #[deprecated(
-        since = "4.1.0",
-        note = "Usage of chat commands via IRC is deprecated and scheduled for removal by Twitch for 2023-02-18. See https://discuss.dev.twitch.tv/t/deprecation-of-chat-commands-through-irc/40486"
-    )]
-    pub async fn ban(
-        &self,
-        channel_login: String,
-        target_login: &str,
-        reason: Option<&str>,
-    ) -> Result<(), Error<T, L>> {
-        let command = match reason {
-            Some(reason) => format!("/ban {} {}", target_login, reason),
-            None => format!("/ban {}", target_login),
-        };
-        self.privmsg(channel_login, command).await
-    }
-
-    /// Unban a user from the given Twitch channel.
-    ///
-    /// Note that this will not throw an error if the target user is not currently banned, doesn't exist
-    /// or if the logged-in user does not have the required permission to unban the user. An error
-    /// is only returned if something prevented the command from being sent over the wire.
-    #[deprecated(
-        since = "4.1.0",
-        note = "Usage of chat commands via IRC is deprecated and scheduled for removal by Twitch for 2023-02-18. See https://discuss.dev.twitch.tv/t/deprecation-of-chat-commands-through-irc/40486"
-    )]
-    pub async fn unban(
-        &self,
-        channel_login: String,
-        target_login: &str,
-    ) -> Result<(), Error<T, L>> {
-        self.privmsg(channel_login, format!("/unban {}", target_login))
-            .await
-    }
-
-    /// Timeout a user in the given Twitch channel.
-    ///
-    /// Note that this will not throw an error if the target user is banned, doesn't exist
-    /// or if the logged-in user does not have the required permission to timeout the user. An error
-    /// is only returned if something prevented the command from being sent over the wire.
-    #[deprecated(
-        since = "4.1.0",
-        note = "Usage of chat commands via IRC is deprecated and scheduled for removal by Twitch for 2023-02-18. See https://discuss.dev.twitch.tv/t/deprecation-of-chat-commands-through-irc/40486"
-    )]
-    pub async fn timeout(
-        &self,
-        channel_login: String,
-        target_login: &str,
-        duration: Duration,
-        reason: Option<&str>,
-    ) -> Result<(), Error<T, L>> {
-        let command = match reason {
-            Some(reason) => format!(
-                "/timeout {} {} {}",
-                target_login,
-                duration.as_secs(),
-                reason
-            ),
-            None => format!("/timeout {} {}", target_login, duration.as_secs()),
-        };
-
-        self.privmsg(channel_login, command).await
-    }
-
-    /// Remove the timeout from a user in the given Twitch channel.
-    ///
-    /// Note that this will not throw an error if the target user is banned, not currently timed
-    /// out, doesn't exist or if the logged-in user does not have the required permission to remove
-    /// the timeout from the user. An error is only returned if something prevented the command from
-    /// being sent over the wire.
-    #[deprecated(
-        since = "4.1.0",
-        note = "Usage of chat commands via IRC is deprecated and scheduled for removal by Twitch for 2023-02-18. See https://discuss.dev.twitch.tv/t/deprecation-of-chat-commands-through-irc/40486"
-    )]
-    pub async fn untimeout(
-        &self,
-        channel_login: String,
-        target_login: &str,
-    ) -> Result<(), Error<T, L>> {
-        self.privmsg(channel_login, format!("/untimeout {}", target_login))
-            .await
     }
 
     /// Join the given Twitch channel (When a channel is joined, the client will receive messages
@@ -378,7 +288,7 @@ impl<T: Transport, L: LoginCredentials> TwitchIRCClient<T, L> {
     /// Unless an answer is again received by the server, the `join()` will then make attempts again
     /// to join that channel.
     ///
-    /// Returns a [validate::Error] if the passed `channel_login` is of
+    /// Returns a [`validate::Error`] if the passed `channel_login` is of
     /// [invalid format](crate::validate::validate_login). Returns `Ok(())` otherwise.
     pub fn join(&self, channel_login: String) -> Result<(), validate::Error> {
         validate_login(&channel_login)?;
@@ -394,12 +304,12 @@ impl<T: Transport, L: LoginCredentials> TwitchIRCClient<T, L> {
     /// but not in the given set are parted, and channels in the set that are not currently
     /// joined are joined.
     ///
-    /// For further semantics about join and parts, see the documentation for [TwitchIRCClient::join].
+    /// For further semantics about join and parts, see the documentation for [`TwitchIRCClient::join`].
     ///
-    /// Returns a [validate::Error] if the passed `channel_login` is of
+    /// Returns a [`validate::Error`] if the passed `channel_login` is of
     /// [invalid format](crate::validate::validate_login). Returns `Ok(())` otherwise.
     pub fn set_wanted_channels(&self, channels: HashSet<String>) -> Result<(), validate::Error> {
-        for channel_login in channels.iter() {
+        for channel_login in &channels {
             validate_login(channel_login)?;
         }
 

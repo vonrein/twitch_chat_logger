@@ -29,7 +29,7 @@ impl TryFrom<IRCMessage> for NoticeMessage {
 
     fn try_from(source: IRCMessage) -> Result<NoticeMessage, ServerMessageParseError> {
         if source.command != "NOTICE" {
-            return Err(ServerMessageParseError::MismatchedCommand(source));
+            return Err(ServerMessageParseError::MismatchedCommand(Box::new(source)));
         }
 
         Ok(NoticeMessage {
@@ -70,7 +70,7 @@ mod tests {
                 message_id: Some("msg_banned".to_owned()),
                 source: irc_message
             }
-        )
+        );
     }
 
     #[test]
@@ -88,6 +88,6 @@ mod tests {
                 message_id: None,
                 source: irc_message
             }
-        )
+        );
     }
 }

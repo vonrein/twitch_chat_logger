@@ -34,7 +34,7 @@ pub struct RoomStateMessage {
     /// (Controlled by `/followers` and `/followersoff` commands in chat)
     ///
     /// See the documentation on `FollowersOnlyMode` for more details on the possible settings.
-    pub follwers_only: Option<FollowersOnlyMode>,
+    pub followers_only: Option<FollowersOnlyMode>,
 
     /// If present, specifies a new setting for the "r9k" beta mode (also sometimes called
     /// unique-chat mode, controlled by the `/r9kbeta` and `/r9kbetaoff` commands)
@@ -89,7 +89,7 @@ impl TryFrom<IRCMessage> for RoomStateMessage {
 
     fn try_from(source: IRCMessage) -> Result<RoomStateMessage, ServerMessageParseError> {
         if source.command != "ROOMSTATE" {
-            return Err(ServerMessageParseError::MismatchedCommand(source));
+            return Err(ServerMessageParseError::MismatchedCommand(Box::new(source)));
         }
 
         // examples:
@@ -106,7 +106,7 @@ impl TryFrom<IRCMessage> for RoomStateMessage {
             channel_login: source.try_get_channel_login()?.to_owned(),
             channel_id: source.try_get_nonempty_tag_value("room-id")?.to_owned(),
             emote_only: source.try_get_optional_bool("emote-only")?,
-            follwers_only: source
+            followers_only: source
                 .try_get_optional_number::<i64>("followers-only")?
                 .map(|n| match n {
                     n if n >= 0 => FollowersOnlyMode::Enabled(Duration::from_secs((n * 60) as u64)),
@@ -147,13 +147,13 @@ mod tests {
                 channel_login: "randers".to_owned(),
                 channel_id: "40286300".to_owned(),
                 emote_only: Some(false),
-                follwers_only: Some(FollowersOnlyMode::Disabled),
+                followers_only: Some(FollowersOnlyMode::Disabled),
                 r9k: Some(false),
                 slow_mode: Some(Duration::from_secs(0)),
                 subscribers_only: Some(false),
                 source: irc_message
             }
-        )
+        );
     }
 
     #[test]
@@ -168,13 +168,13 @@ mod tests {
                 channel_login: "randers".to_owned(),
                 channel_id: "40286300".to_owned(),
                 emote_only: Some(true),
-                follwers_only: Some(FollowersOnlyMode::Enabled(Duration::from_secs(0))),
+                followers_only: Some(FollowersOnlyMode::Enabled(Duration::from_secs(0))),
                 r9k: Some(true),
                 slow_mode: Some(Duration::from_secs(5)),
                 subscribers_only: Some(true),
                 source: irc_message
             }
-        )
+        );
     }
 
     #[test]
@@ -184,9 +184,9 @@ mod tests {
         let msg = RoomStateMessage::try_from(irc_message).unwrap();
 
         assert_eq!(
-            msg.follwers_only,
+            msg.followers_only,
             Some(FollowersOnlyMode::Enabled(Duration::from_secs(10 * 60))) // 10 minutes
-        )
+        );
     }
 
     #[test]
@@ -201,13 +201,13 @@ mod tests {
                 channel_login: "randers".to_owned(),
                 channel_id: "40286300".to_owned(),
                 emote_only: None,
-                follwers_only: None,
+                followers_only: None,
                 r9k: None,
                 slow_mode: Some(Duration::from_secs(5)),
                 subscribers_only: None,
                 source: irc_message
             }
-        )
+        );
     }
 
     #[test]
@@ -222,12 +222,12 @@ mod tests {
                 channel_login: "randers".to_owned(),
                 channel_id: "40286300".to_owned(),
                 emote_only: Some(true),
-                follwers_only: None,
+                followers_only: None,
                 r9k: None,
                 slow_mode: None,
                 subscribers_only: None,
                 source: irc_message
             }
-        )
+        );
     }
 }

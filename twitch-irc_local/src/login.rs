@@ -18,12 +18,15 @@ use std::fmt::{Debug, Display};
         feature = "refreshing-token-rustls-webpki-roots"
     ),
 ))]
-compile_error!("`refreshing-token-native-tls`, `refreshing-token-rustls-native-roots` and `refreshing-token-rustls-webpki-roots` feature flags are mutually exclusive, enable at most one of them");
+compile_error!(
+    "`refreshing-token-native-tls`, `refreshing-token-rustls-native-roots` and `refreshing-token-rustls-webpki-roots` feature flags are mutually exclusive, enable at most one of them"
+);
 
 #[cfg(feature = "__refreshing-token")]
 use {
     chrono::DateTime,
     chrono::Utc,
+    reqwest::ClientBuilder,
     std::{sync::Arc, time::Duration},
     thiserror::Error,
     tokio::sync::Mutex,
@@ -33,7 +36,7 @@ use {
 use {serde::Deserialize, serde::Serialize};
 
 /// A pair of login name and OAuth token.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "with-serde", derive(Serialize, Deserialize))]
 pub struct CredentialsPair {
     /// Login name of the user that the library should log into chat as.
@@ -42,6 +45,16 @@ pub struct CredentialsPair {
     /// If `None`, then no password will be sent to the server at all (for anonymous
     /// credentials).
     pub token: Option<String>,
+}
+
+// Custom implementation to display [redacted] in place of the token
+impl Debug for CredentialsPair {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CredentialsPair")
+            .field("login", &self.login)
+            .field("token", &self.token.as_ref().map(|_| "[redacted]"))
+            .finish()
+    }
 }
 
 /// Encapsulates logic for getting the credentials to log into chat, whenever
@@ -67,6 +80,7 @@ pub struct StaticLoginCredentials {
 impl StaticLoginCredentials {
     /// Create new static login credentials from the given Twitch login name and OAuth access token.
     /// The `token` should be without the `oauth:` prefix.
+    #[must_use]
     pub fn new(login: String, token: Option<String>) -> StaticLoginCredentials {
         StaticLoginCredentials {
             credentials: CredentialsPair { login, token },
@@ -74,6 +88,7 @@ impl StaticLoginCredentials {
     }
 
     /// Creates login credentials for logging into chat as an anonymous user.
+    #[must_use]
     pub fn anonymous() -> StaticLoginCredentials {
         StaticLoginCredentials::new("justinfan12345".to_owned(), None)
     }
@@ -91,7 +106,7 @@ impl LoginCredentials for StaticLoginCredentials {
 /// The necessary details about a Twitch OAuth Access Token. This information is provided
 /// by Twitch's OAuth API after completing the user's authorization.
 #[cfg(feature = "__refreshing-token")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct UserAccessToken {
     /// OAuth access token
     pub access_token: String,
@@ -101,6 +116,19 @@ pub struct UserAccessToken {
     pub created_at: DateTime<Utc>,
     /// Timestamp of when this user access token expires. `None` if this token never expires.
     pub expires_at: Option<DateTime<Utc>>,
+}
+
+// Custom implementation to display [redacted] in place of the token
+#[cfg(feature = "__refreshing-token")]
+impl Debug for UserAccessToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UserAccessToken")
+            .field("access_token", &"[redacted]")
+            .field("refresh_token", &"[redacted]")
+            .field("created_at", &self.created_at)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 /// Represents the Twitch API response to `POST /oauth2/token` API requests.
@@ -175,13 +203,27 @@ pub trait TokenStorage: Debug + Send + 'static {
 /// These can also be cloned before being passed to a `Client` so you can use them in other places,
 /// such as API calls.
 #[cfg(feature = "__refreshing-token")]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RefreshingLoginCredentials<S: TokenStorage> {
     http_client: reqwest::Client,
     user_login: Arc<Mutex<Option<String>>>,
     client_id: String,
     client_secret: String,
     token_storage: Arc<Mutex<S>>,
+}
+
+// Custom implementation to display [redacted] in place of the client secret
+#[cfg(feature = "__refreshing-token")]
+impl<S: TokenStorage> Debug for RefreshingLoginCredentials<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RefreshingLoginCredentials")
+            .field("http_client", &self.http_client)
+            .field("user_login", &self.user_login)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"[redacted]")
+            .field("token_storage", &self.token_storage)
+            .finish()
+    }
 }
 
 #[cfg(feature = "__refreshing-token")]
@@ -211,8 +253,27 @@ impl<S: TokenStorage> RefreshingLoginCredentials<S> {
         client_secret: String,
         token_storage: S,
     ) -> RefreshingLoginCredentials<S> {
+        let http_client = {
+            #[cfg_attr(
+                not(feature = "refreshing-token-rustls-webpki-roots"),
+                allow(unused_mut)
+            )]
+            let mut builder = ClientBuilder::new();
+
+            #[cfg(feature = "refreshing-token-rustls-webpki-roots")]
+            {
+                builder = builder.tls_certs_only(
+                    webpki_root_certs::TLS_SERVER_ROOT_CERTS
+                        .iter()
+                        .map(|cert| reqwest::tls::Certificate::from_der(cert).unwrap()),
+                );
+            }
+
+            builder.build().unwrap()
+        };
+
         RefreshingLoginCredentials {
-            http_client: reqwest::Client::new(),
+            http_client,
             user_login: Arc::new(Mutex::new(user_login)),
             client_id,
             client_secret,
@@ -291,38 +352,37 @@ impl<S: TokenStorage> LoginCredentials for RefreshingLoginCredentials<S> {
 
         let mut current_login = self.user_login.lock().await;
 
-        let login = match &*current_login {
-            Some(login) => login.clone(),
-            None => {
-                let response = self
-                    .http_client
-                    .get("https://api.twitch.tv/helix/users")
-                    .header("Client-Id", &self.client_id)
-                    .bearer_auth(&current_token.access_token)
-                    .send()
-                    .await
-                    .map_err(RefreshingLoginError::RefreshError)?;
+        let login = if let Some(login) = &*current_login {
+            login.clone()
+        } else {
+            let response = self
+                .http_client
+                .get("https://api.twitch.tv/helix/users")
+                .header("Client-Id", &self.client_id)
+                .bearer_auth(&current_token.access_token)
+                .send()
+                .await
+                .map_err(RefreshingLoginError::RefreshError)?;
 
-                let users_response = response
-                    .json::<UsersResponse>()
-                    .await
-                    .map_err(RefreshingLoginError::RefreshError)?;
+            let users_response = response
+                .json::<UsersResponse>()
+                .await
+                .map_err(RefreshingLoginError::RefreshError)?;
 
-                // If no users are specified in the query, the API reponds with the user of the bearer token.
-                let user = users_response.data.into_iter().next().unwrap();
+            // If no users are specified in the query, the API reponds with the user of the bearer token.
+            let user = users_response.data.into_iter().next().unwrap();
 
-                // TODO Have the fetched login name expire automatically to be resilient to bot's namechanges
-                // should then also automatically reconnect all connections with the new username, so the change
-                // will be a little more complex than just adding an expiry to this logic here.
-                tracing::info!(
-                    "Fetched login name `{}` for provided auth token",
-                    &user.login
-                );
+            // TODO Have the fetched login name expire automatically to be resilient to bot's namechanges
+            // should then also automatically reconnect all connections with the new username, so the change
+            // will be a little more complex than just adding an expiry to this logic here.
+            tracing::info!(
+                "Fetched login name `{}` for provided auth token",
+                &user.login
+            );
 
-                *current_login = Some(user.login.clone());
+            *current_login = Some(user.login.clone());
 
-                user.login
-            }
+            user.login
         };
 
         Ok(CredentialsPair {

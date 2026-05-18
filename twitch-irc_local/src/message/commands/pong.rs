@@ -1,5 +1,5 @@
-use crate::message::commands::ServerMessageParseError;
 use crate::message::IRCMessage;
+use crate::message::commands::ServerMessageParseError;
 use std::convert::TryFrom;
 
 #[cfg(feature = "with-serde")]
@@ -18,7 +18,7 @@ impl TryFrom<IRCMessage> for PongMessage {
 
     fn try_from(source: IRCMessage) -> Result<PongMessage, ServerMessageParseError> {
         if source.command != "PONG" {
-            return Err(ServerMessageParseError::MismatchedCommand(source));
+            return Err(ServerMessageParseError::MismatchedCommand(Box::new(source)));
         }
 
         Ok(PongMessage { source })
@@ -48,7 +48,7 @@ mod tests {
             PongMessage {
                 source: irc_message
             }
-        )
+        );
     }
 
     #[test]
@@ -63,6 +63,6 @@ mod tests {
             PongMessage {
                 source: irc_message
             }
-        )
+        );
     }
 }

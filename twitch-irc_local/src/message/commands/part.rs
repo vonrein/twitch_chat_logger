@@ -1,5 +1,5 @@
-use crate::message::commands::{IRCMessageParseExt, ServerMessageParseError};
 use crate::message::IRCMessage;
+use crate::message::commands::{IRCMessageParseExt, ServerMessageParseError};
 use std::convert::TryFrom;
 
 #[cfg(feature = "with-serde")]
@@ -23,7 +23,7 @@ impl TryFrom<IRCMessage> for PartMessage {
 
     fn try_from(source: IRCMessage) -> Result<PartMessage, ServerMessageParseError> {
         if source.command != "PART" {
-            return Err(ServerMessageParseError::MismatchedCommand(source));
+            return Err(ServerMessageParseError::MismatchedCommand(Box::new(source)));
         }
 
         Ok(PartMessage {
@@ -58,6 +58,6 @@ mod tests {
                 user_login: "randers811".to_owned(),
                 source: irc_message
             }
-        )
+        );
     }
 }

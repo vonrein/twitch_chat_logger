@@ -13,7 +13,10 @@ pub mod usernotice;
 pub mod userstate;
 pub mod whisper;
 
-use self::ServerMessageParseError::*;
+use self::ServerMessageParseError::{
+    MalformedChannel, MalformedTagValue, MissingNickname, MissingParameter, MissingPrefix,
+    MissingTag, MissingTagValue,
+};
 use crate::message::commands::clearmsg::ClearMsgMessage;
 use crate::message::commands::join::JoinMessage;
 use crate::message::commands::part::PartMessage;
@@ -25,7 +28,7 @@ use crate::message::prefix::IRCPrefix;
 use crate::message::twitch::{Badge, Emote, RGBColor};
 use crate::message::{
     AsRawIRC, ClearChatMessage, GlobalUserStateMessage, IRCMessage, NoticeMessage, PrivmsgMessage,
-    RoomStateMessage, UserNoticeMessage, WhisperMessage,
+    ReplyParent, RoomStateMessage, TwitchUserBasics, UserNoticeMessage, WhisperMessage,
 };
 use chrono::{DateTime, TimeZone, Utc};
 use std::collections::HashSet;
@@ -47,45 +50,75 @@ pub enum ServerMessageParseError {
     /// server message implementation, instead of the general `ServerMessage::try_from`
     /// which covers all implementations and does not emit this type of error.
     #[error("Could not parse IRC message {} as ServerMessage: That command's data is not parsed by this implementation", .0.as_raw_irc())]
-    MismatchedCommand(IRCMessage),
+    MismatchedCommand(Box<IRCMessage>),
     /// No tag present under key `key`
-    #[error("Could not parse IRC message {} as ServerMessage: No tag present under key `{1}`", .0.as_raw_irc())]
-    MissingTag(IRCMessage, &'static str),
+    #[error(
+        "Could not parse IRC message {msg} as ServerMessage: No tag present under key `{key}`",
+        msg = .0.as_raw_irc(),
+        key = .1,
+    )]
+    MissingTag(Box<IRCMessage>, &'static str),
     /// No tag value present under key `key`
-    #[error("Could not parse IRC message {} as ServerMessage: No tag value present under key `{1}`", .0.as_raw_irc())]
-    MissingTagValue(IRCMessage, &'static str),
+    #[error(
+        "Could not parse IRC message {msg} as ServerMessage: No tag value present under key `{key}`", 
+        msg = .0.as_raw_irc(),
+        key = .1,
+    )]
+    MissingTagValue(Box<IRCMessage>, &'static str),
     /// Malformed tag value for tag `key`, value was `value`
-    #[error("Could not parse IRC message {} as ServerMessage: Malformed tag value for tag `{1}`, value was `{2}`", .0.as_raw_irc())]
-    MalformedTagValue(IRCMessage, &'static str, String),
+    #[error(
+        "Could not parse IRC message {msg} as ServerMessage: Malformed tag value for tag `{key}`, value was `{value}`",
+        msg = .0.as_raw_irc(),
+        key = .1,
+        value = .2,
+    )]
+    MalformedTagValue(Box<IRCMessage>, &'static str, String),
     /// No parameter found at index `n`
-    #[error("Could not parse IRC message {} as ServerMessage: No parameter found at index {1}", .0.as_raw_irc())]
-    MissingParameter(IRCMessage, usize),
+    #[error(
+        "Could not parse IRC message {msg} as ServerMessage: No parameter found at index {key}",
+        msg = .0.as_raw_irc(),
+        key = .1,
+    )]
+    MissingParameter(Box<IRCMessage>, usize),
     /// Malformed channel parameter (`#` must be present + something after it)
-    #[error("Could not parse IRC message {} as ServerMessage: Malformed channel parameter (# must be present + something after it)", .0.as_raw_irc())]
-    MalformedChannel(IRCMessage),
+    #[error(
+        "Could not parse IRC message {msg} as ServerMessage: Malformed channel parameter (# must be present + something after it)",
+        msg = .0.as_raw_irc(),
+    )]
+    MalformedChannel(Box<IRCMessage>),
     /// Malformed parameter at index `n`
-    #[error("Could not parse IRC message {} as ServerMessage: Malformed parameter at index {1}", .0.as_raw_irc())]
-    MalformedParameter(IRCMessage, usize),
+    #[error(
+        "Could not parse IRC message {msg} as ServerMessage: Malformed parameter at index {idx}",
+        msg = .0.as_raw_irc(),
+        idx = .1,
+    )]
+    MalformedParameter(Box<IRCMessage>, usize),
     /// Missing prefix altogether
-    #[error("Could not parse IRC message {} as ServerMessage: Missing prefix altogether", .0.as_raw_irc())]
-    MissingPrefix(IRCMessage),
+    #[error(
+        "Could not parse IRC message {msg} as ServerMessage: Missing prefix altogether",
+        msg = .0.as_raw_irc(),
+    )]
+    MissingPrefix(Box<IRCMessage>),
     /// No nickname found in prefix
-    #[error("Could not parse IRC message {} as ServerMessage: No nickname found in prefix", .0.as_raw_irc())]
-    MissingNickname(IRCMessage),
+    #[error(
+        "Could not parse IRC message {msg} as ServerMessage: No nickname found in prefix",
+        msg = .0.as_raw_irc(),
+    )]
+    MissingNickname(Box<IRCMessage>),
 }
 
 impl From<ServerMessageParseError> for IRCMessage {
     fn from(msg: ServerMessageParseError) -> IRCMessage {
         match msg {
-            ServerMessageParseError::MismatchedCommand(m) => m,
-            ServerMessageParseError::MissingTag(m, _) => m,
-            ServerMessageParseError::MissingTagValue(m, _) => m,
-            ServerMessageParseError::MalformedTagValue(m, _, _) => m,
-            ServerMessageParseError::MissingParameter(m, _) => m,
-            ServerMessageParseError::MalformedChannel(m) => m,
-            ServerMessageParseError::MalformedParameter(m, _) => m,
-            ServerMessageParseError::MissingPrefix(m) => m,
-            ServerMessageParseError::MissingNickname(m) => m,
+            ServerMessageParseError::MismatchedCommand(m)
+            | ServerMessageParseError::MissingTag(m, _)
+            | ServerMessageParseError::MissingTagValue(m, _)
+            | ServerMessageParseError::MalformedTagValue(m, _, _)
+            | ServerMessageParseError::MissingParameter(m, _)
+            | ServerMessageParseError::MalformedChannel(m)
+            | ServerMessageParseError::MalformedParameter(m, _)
+            | ServerMessageParseError::MissingPrefix(m)
+            | ServerMessageParseError::MissingNickname(m) => *m,
         }
     }
 }
@@ -93,8 +126,7 @@ impl From<ServerMessageParseError> for IRCMessage {
 trait IRCMessageParseExt {
     fn try_get_param(&self, index: usize) -> Result<&str, ServerMessageParseError>;
     fn try_get_message_text(&self) -> Result<(&str, bool), ServerMessageParseError>;
-    fn try_get_tag_value(&self, key: &'static str)
-        -> Result<Option<&str>, ServerMessageParseError>;
+    fn try_get_tag_value(&self, key: &'static str) -> Result<&str, ServerMessageParseError>;
     fn try_get_nonempty_tag_value(
         &self,
         key: &'static str,
@@ -137,6 +169,8 @@ trait IRCMessageParseExt {
         &self,
         tag_key: &'static str,
     ) -> Result<DateTime<Utc>, ServerMessageParseError>;
+    fn try_get_optional_reply_parent(&self)
+    -> Result<Option<ReplyParent>, ServerMessageParseError>;
 }
 
 impl IRCMessageParseExt for IRCMessage {
@@ -144,7 +178,7 @@ impl IRCMessageParseExt for IRCMessage {
         Ok(self
             .params
             .get(index)
-            .ok_or_else(|| MissingParameter(self.to_owned(), index))?)
+            .ok_or_else(|| MissingParameter(Box::new(self.to_owned()), index))?)
     }
 
     fn try_get_message_text(&self) -> Result<(&str, bool), ServerMessageParseError> {
@@ -154,20 +188,16 @@ impl IRCMessageParseExt for IRCMessage {
             message_text.starts_with("\u{0001}ACTION ") && message_text.ends_with('\u{0001}');
         if is_action {
             // remove the prefix and suffix
-            message_text = &message_text[8..message_text.len() - 1]
+            message_text = &message_text[8..message_text.len() - 1];
         }
 
         Ok((message_text, is_action))
     }
 
-    fn try_get_tag_value(
-        &self,
-        key: &'static str,
-    ) -> Result<Option<&str>, ServerMessageParseError> {
+    fn try_get_tag_value(&self, key: &'static str) -> Result<&str, ServerMessageParseError> {
         match self.tags.0.get(key) {
-            Some(Some(value)) => Ok(Some(value)),
-            Some(None) => Ok(None),
-            None => Err(MissingTag(self.to_owned(), key)),
+            Some(value) => Ok(value),
+            None => Err(MissingTag(Box::new(self.to_owned()), key)),
         }
     }
 
@@ -176,9 +206,11 @@ impl IRCMessageParseExt for IRCMessage {
         key: &'static str,
     ) -> Result<&str, ServerMessageParseError> {
         match self.tags.0.get(key) {
-            Some(Some(value)) => Ok(value),
-            Some(None) => Err(MissingTagValue(self.to_owned(), key)),
-            None => Err(MissingTag(self.to_owned(), key)),
+            Some(value) => match value.as_str() {
+                "" => Err(MissingTagValue(Box::new(self.to_owned()), key)),
+                otherwise => Ok(otherwise),
+            },
+            None => Err(MissingTag(Box::new(self.to_owned()), key)),
         }
     }
 
@@ -187,8 +219,10 @@ impl IRCMessageParseExt for IRCMessage {
         key: &'static str,
     ) -> Result<Option<&str>, ServerMessageParseError> {
         match self.tags.0.get(key) {
-            Some(Some(value)) => Ok(Some(value)),
-            Some(None) => Err(MissingTagValue(self.to_owned(), key)),
+            Some(value) => match value.as_str() {
+                "" => Err(MissingTagValue(Box::new(self.to_owned()), key)),
+                otherwise => Ok(Some(otherwise)),
+            },
             None => Ok(None),
         }
     }
@@ -197,7 +231,7 @@ impl IRCMessageParseExt for IRCMessage {
         let param = self.try_get_param(0)?;
 
         if !param.starts_with('#') || param.len() < 2 {
-            return Err(MalformedChannel(self.to_owned()));
+            return Err(MalformedChannel(Box::new(self.to_owned())));
         }
 
         Ok(&param[1..])
@@ -211,7 +245,7 @@ impl IRCMessageParseExt for IRCMessage {
         }
 
         if !param.starts_with('#') || param.len() < 2 {
-            return Err(MalformedChannel(self.to_owned()));
+            return Err(MalformedChannel(Box::new(self.to_owned())));
         }
 
         Ok(Some(&param[1..]))
@@ -220,8 +254,10 @@ impl IRCMessageParseExt for IRCMessage {
     /// Get the sending user's login name from the IRC prefix.
     fn try_get_prefix_nickname(&self) -> Result<&str, ServerMessageParseError> {
         match &self.prefix {
-            None => Err(MissingPrefix(self.to_owned())),
-            Some(IRCPrefix::HostOnly { host: _ }) => Err(MissingNickname(self.to_owned())),
+            None => Err(MissingPrefix(Box::new(self.to_owned()))),
+            Some(IRCPrefix::HostOnly { host: _ }) => {
+                Err(MissingNickname(Box::new(self.to_owned())))
+            }
             Some(IRCPrefix::Full {
                 nick,
                 user: _,
@@ -235,7 +271,7 @@ impl IRCMessageParseExt for IRCMessage {
         tag_key: &'static str,
         message_text: &str,
     ) -> Result<Vec<Emote>, ServerMessageParseError> {
-        let tag_value = self.try_get_nonempty_tag_value(tag_key)?;
+        let tag_value = self.try_get_tag_value(tag_key)?;
 
         if tag_value.is_empty() {
             return Ok(vec![]);
@@ -243,7 +279,8 @@ impl IRCMessageParseExt for IRCMessage {
 
         let mut emotes = Vec::new();
 
-        let make_error = || MalformedTagValue(self.to_owned(), tag_key, tag_value.to_owned());
+        let make_error =
+            || MalformedTagValue(Box::new(self.to_owned()), tag_key, tag_value.to_owned());
 
         // emotes tag format:
         // emote_id:from-to,from-to,from-to/emote_id:from-to,from-to/emote_id:from-to
@@ -288,7 +325,7 @@ impl IRCMessageParseExt for IRCMessage {
         &self,
         tag_key: &'static str,
     ) -> Result<HashSet<String>, ServerMessageParseError> {
-        let src = self.try_get_nonempty_tag_value(tag_key)?;
+        let src = self.try_get_tag_value(tag_key)?;
 
         if src.is_empty() {
             Ok(HashSet::new())
@@ -299,7 +336,7 @@ impl IRCMessageParseExt for IRCMessage {
 
     fn try_get_badges(&self, tag_key: &'static str) -> Result<Vec<Badge>, ServerMessageParseError> {
         // TODO same thing as above, could be optimized to not clone the tag value as well
-        let tag_value = self.try_get_nonempty_tag_value(tag_key)?;
+        let tag_value = self.try_get_tag_value(tag_key)?;
 
         if tag_value.is_empty() {
             return Ok(vec![]);
@@ -307,7 +344,8 @@ impl IRCMessageParseExt for IRCMessage {
 
         let mut badges = Vec::new();
 
-        let make_error = || MalformedTagValue(self.to_owned(), tag_key, tag_value.to_owned());
+        let make_error =
+            || MalformedTagValue(Box::new(self.to_owned()), tag_key, tag_value.to_owned());
 
         // badges tag format:
         // admin/1,moderator/1,subscriber/12
@@ -327,8 +365,9 @@ impl IRCMessageParseExt for IRCMessage {
         &self,
         tag_key: &'static str,
     ) -> Result<Option<RGBColor>, ServerMessageParseError> {
-        let tag_value = self.try_get_nonempty_tag_value(tag_key)?;
-        let make_error = || MalformedTagValue(self.to_owned(), tag_key, tag_value.to_owned());
+        let tag_value = self.try_get_tag_value(tag_key)?;
+        let make_error =
+            || MalformedTagValue(Box::new(self.to_owned()), tag_key, tag_value.to_owned());
 
         if tag_value.is_empty() {
             return Ok(None);
@@ -351,8 +390,9 @@ impl IRCMessageParseExt for IRCMessage {
         tag_key: &'static str,
     ) -> Result<N, ServerMessageParseError> {
         let tag_value = self.try_get_nonempty_tag_value(tag_key)?;
-        let number = N::from_str(tag_value)
-            .map_err(|_| MalformedTagValue(self.to_owned(), tag_key, tag_value.to_owned()))?;
+        let number = N::from_str(tag_value).map_err(|_| {
+            MalformedTagValue(Box::new(self.to_owned()), tag_key, tag_value.to_owned())
+        })?;
         Ok(number)
     }
 
@@ -365,13 +405,16 @@ impl IRCMessageParseExt for IRCMessage {
         tag_key: &'static str,
     ) -> Result<Option<N>, ServerMessageParseError> {
         let tag_value = match self.tags.0.get(tag_key) {
-            Some(Some(value)) => value,
-            Some(None) => return Err(MissingTagValue(self.to_owned(), tag_key)),
+            Some(value) => match value.as_str() {
+                "" => return Err(MissingTagValue(Box::new(self.to_owned()), tag_key)),
+                otherwise => otherwise,
+            },
             None => return Ok(None),
         };
 
-        let number = N::from_str(tag_value)
-            .map_err(|_| MalformedTagValue(self.to_owned(), tag_key, tag_value.to_owned()))?;
+        let number = N::from_str(tag_value).map_err(|_| {
+            MalformedTagValue(Box::new(self.to_owned()), tag_key, tag_value.to_owned())
+        })?;
         Ok(Some(number))
     }
 
@@ -388,11 +431,39 @@ impl IRCMessageParseExt for IRCMessage {
     ) -> Result<DateTime<Utc>, ServerMessageParseError> {
         // e.g. tmi-sent-ts.
         let tag_value = self.try_get_nonempty_tag_value(tag_key)?;
-        let milliseconds_since_epoch = i64::from_str(tag_value)
-            .map_err(|_| MalformedTagValue(self.to_owned(), tag_key, tag_value.to_owned()))?;
+        let milliseconds_since_epoch = i64::from_str(tag_value).map_err(|_| {
+            MalformedTagValue(Box::new(self.to_owned()), tag_key, tag_value.to_owned())
+        })?;
         Utc.timestamp_millis_opt(milliseconds_since_epoch)
             .single()
-            .ok_or_else(|| MalformedTagValue(self.to_owned(), tag_key, tag_value.to_owned()))
+            .ok_or_else(|| {
+                MalformedTagValue(Box::new(self.to_owned()), tag_key, tag_value.to_owned())
+            })
+    }
+
+    fn try_get_optional_reply_parent(
+        &self,
+    ) -> Result<Option<ReplyParent>, ServerMessageParseError> {
+        // If at least one of the reply-parent tags is present, the other four will be guaranteed.
+        if !self.tags.0.contains_key("reply-parent-msg-id") {
+            return Ok(None);
+        }
+
+        Ok(Some(ReplyParent {
+            message_id: self.try_get_tag_value("reply-parent-msg-id")?.to_owned(),
+            reply_parent_user: TwitchUserBasics {
+                id: self
+                    .try_get_nonempty_tag_value("reply-parent-user-id")?
+                    .to_owned(),
+                login: self
+                    .try_get_nonempty_tag_value("reply-parent-user-login")?
+                    .to_owned(),
+                name: self
+                    .try_get_nonempty_tag_value("reply-parent-display-name")?
+                    .to_owned(),
+            },
+            message_text: self.try_get_tag_value("reply-parent-msg-body")?.to_owned(),
+        }))
     }
 }
 
@@ -407,7 +478,7 @@ impl IRCMessageParseExt for IRCMessage {
 #[doc(hidden)]
 pub struct HiddenIRCMessage(pub(self) IRCMessage);
 
-/// An IRCMessage that has been parsed into a more concrete type based on its command.
+/// An [`IRCMessage`] that has been parsed into a more concrete type based on its command.
 ///
 /// This type is non-exhausive, because more types of commands exist and can be added.
 ///
@@ -480,7 +551,10 @@ impl TryFrom<IRCMessage> for ServerMessage {
     type Error = ServerMessageParseError;
 
     fn try_from(source: IRCMessage) -> Result<ServerMessage, ServerMessageParseError> {
-        use ServerMessage::*;
+        use ServerMessage::{
+            ClearChat, ClearMsg, Generic, GlobalUserState, Join, Notice, Part, Ping, Pong, Privmsg,
+            Reconnect, RoomState, UserNotice, UserState, Whisper,
+        };
 
         Ok(match source.command.as_str() {
             "CLEARCHAT" => ClearChat(ClearChatMessage::try_from(source)?),
@@ -527,6 +601,7 @@ impl From<ServerMessage> for IRCMessage {
 // borrowed variant of the above
 impl ServerMessage {
     /// Get a reference to the `IRCMessage` this `ServerMessage` was parsed from.
+    #[must_use]
     pub fn source(&self) -> &IRCMessage {
         match self {
             ServerMessage::ClearChat(msg) => &msg.source,

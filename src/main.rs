@@ -37,7 +37,7 @@ use channel_config::{ChannelConfig, load_channel_config, apply_named_color};
 mod sound;
 use sound::{play_sound};
 use home;
-use rand::Rng;
+use rand::RngExt;
 
 
 //#[cfg(not(target_os = "windows"))] // Only use on Linux/Unix
@@ -223,7 +223,7 @@ struct NotificationState {
 // --- Main Application Logic ---
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    println!("last update: 26.10.25");
+    println!("last update: 16.05.26");
 
 
 
@@ -572,7 +572,7 @@ async fn main() -> Result<()> {
                                     "SOUND".into(),
                                     "SAVE".into(),
                                     "NOTIFY".into(),
-                                    "MSGLOGGING".into(), // Add the new command
+                                    "MSGLOGGING".into(),
                                     "EXIT".into(),
                                     "RECONNECT".into(),
                                     "PAUSES".into(),
@@ -828,7 +828,8 @@ fn handle_default(
         .tags
         .0
         .get("msg-id")
-        .and_then(|v| v.as_deref())
+        //.and_then(|v| v.as_deref())
+        .map(|v| v.as_str())
         .unwrap_or("unknown"));
     } else {
         println!("{} ...", time.dimmed())
@@ -870,15 +871,10 @@ fn handle_privmsg(
     let tags = &msg.source.tags;
 
     // Add virtual badges based on tag fields
-    if let Some(first_msg) = tags.0.get("first-msg").and_then(|v| v.as_deref()) {
+    //if let Some(first_msg) = tags.0.get("first-msg").and_then(|v| v.as_deref()) {
+    if let Some(first_msg) = tags.0.get("first-msg").map(|v| v.as_str()) {
         if first_msg == "1" {
             custom_badges.push("(FIRSTMSG)".to_string());
-        }
-    }
-
-    if let Some(returning) = tags.0.get("returning-chatter").and_then(|v| v.as_deref()) {
-        if returning == "1" {
-            custom_badges.push("(RETURNING)".to_string());
         }
     }
 
@@ -978,7 +974,8 @@ fn handle_user_notice(
     .tags
     .0
     .get("msg-id")
-    .and_then(|v| v.as_deref())
+    //.and_then(|v| v.as_deref())
+    .map(|v| v.as_str())
     .unwrap_or("unknown");
 
     let event_type = match &msg.event {
@@ -1087,15 +1084,14 @@ fn handle_join_or_part(
         }
     }
 }
-
 fn save_logs(
     target: &str,
     logs: &Arc<Mutex<HashMap<String, Vec<String>>>>,
-    join_logs: &Arc<Mutex<Vec<String>>>, // Kept as Vec (Global) to match main.rs
-             channel_titles: &Arc<Mutex<HashMap<String, String>>>,
-             reconnect_times: &Arc<Mutex<Vec<String>>>,
-             user_ids: &Arc<Mutex<HashMap<String, String>>>,
-             custom_name: Option<&str>,
+    join_logs: &Arc<Mutex<Vec<String>>>,
+    channel_titles: &Arc<Mutex<HashMap<String, String>>>,
+    reconnect_times: &Arc<Mutex<Vec<String>>>,
+    user_ids: &Arc<Mutex<HashMap<String, String>>>,
+    custom_name: Option<&str>,
 ) {
     let logs_locked = logs.lock().unwrap();
     let mut join_logs_locked = join_logs.lock().unwrap();
@@ -1116,7 +1112,7 @@ fn save_logs(
         }
     }
 
-    // --- PART 1: SAVE CHAT MESSAGES (Per Channel) ---
+    // --- PART 1: SAVE CHAT MESSAGES (Already had BOM, kept for consistency) ---
     let targets: Vec<String> = if target.eq_ignore_ascii_case("ALL") {
         logs_locked.keys().cloned().collect()
     } else {
@@ -1137,18 +1133,10 @@ fn save_logs(
         let name_to_use = custom_name.or_else(|| titles_locked.get(&chan).map(|s| s.as_str()));
 
         if let Some(messages) = logs_locked.get(&chan) {
-            // RESTORED FUNCTIONALITY:
-            // check if there are actual user messages (containing < and >)
-            // If not, we skip saving this file.
             if !messages.iter().any(|line| line.contains('<') && line.contains('>')) {
-                println!(
-                    "Skipping message log for '{}': No chat messages, only join/part events.",
-                    chan.yellow()
-                );
                 continue;
             }
 
-            // Calculate timestamp based on first message, or now
             let time_part = messages
             .iter()
             .find(|line| line.contains('<') && line.contains('>'))
@@ -1157,7 +1145,6 @@ fn save_logs(
 
             let timestamp_for_save = format!("{}_{}", *STARTUP_DATE, time_part);
 
-            // Generate Filename
             let file_name = if let Some(name) = name_to_use {
                 let sanitized_name = name.replace(' ', "_");
                 format!("{}_{}_{}.txt", chan, sanitized_name, timestamp_for_save)
@@ -1167,7 +1154,7 @@ fn save_logs(
 
             let file_path = log_dir_path.join(&file_name);
 
-            // --- Stats Calculation (Restored from Old Code) ---
+            // ... [Stats calculation logic remains the same] ...
             let mut msg_count = 0;
             let mut unique_chatters = HashSet::new();
             let mut mod_events = 0;
@@ -1176,150 +1163,67 @@ fn save_logs(
             let mut milestone_events = 0;
             let mut other_events = 0;
             let mut user_message_stats: HashMap<String, usize> = HashMap::new();
+            let mut banned_users_set = HashSet::new();
+            let mut timeout_users_set = HashSet::new();
+            let mut seen_vips_set = HashSet::new();
 
             for line in messages {
-                // Flag to determine if we should attempt to count this as a user message
                 let mut potentially_chat = false;
+                if line.contains("SUBORRESUB") || line.contains("SUBGIFT") || line.contains("SUBMYSTERYGIFT") || line.contains("ANONSUBMYSTERYGIFT") || line.contains("GIFTPAIDUPGRADE") || line.contains("ANONPAIDGIFTUPGRADE") || line.contains("PRIMEPAIDUPGRADE") || line.contains("COMMUNITYPAYFORWARD") || line.contains("[SUBSCRIPTION]") || line.contains("[RESUBSCRIPTION]") { sub_events += 1; potentially_chat = true; }
+                else if line.contains("USER_BANNED") { mod_events += 1; if let Some(start_bracket) = line.find("] ") { let content = &line[start_bracket + 2..]; if let Some(end_name) = content.find(' ') { banned_users_set.insert(content[..end_name].to_string()); } } }
+                else if line.contains("TIMEOUT") { mod_events += 1; if let Some(start_bracket) = line.find("] ") { let content = &line[start_bracket + 2..]; if let Some(end_name) = content.find(' ') { timeout_users_set.insert(content[..end_name].to_string()); } } }
+                else if line.contains("CLEARMSG") || line.contains("CHAT_CLEARED") { mod_events += 1; }
+                else if line.contains("RAID") && line.contains("raiders from") && line.contains("have joined") { raid_events += 1; }
+                else if line.contains("VIEWERMILESTONE") || line.contains("MILESTONE") { milestone_events += 1; potentially_chat = true; }
+                else if line.contains("ANNOUNCEMENT") || line.contains("SHAREDCHATNOTICE") { other_events += 1; potentially_chat = true; }
+                else if line.contains("[JOIN] ") || line.contains("[PART] ") {
+                    let name_part = if let Some(idx) = line.find("[JOIN] ") { Some(&line[idx + 7..]) } else if let Some(idx) = line.find("[PART] ") { Some(&line[idx + 7..]) } else { None };
+                    if let Some(name_str) = name_part { let name = name_str.trim(); if !name.is_empty() && !name.eq_ignore_ascii_case(&chan) { seen_vips_set.insert(name.to_string()); } }
+                } else { potentially_chat = true; }
 
-                if line.contains("SUBORRESUB")
-                    || line.contains("SUBGIFT")
-                    || line.contains("SUBMYSTERYGIFT")
-                    || line.contains("ANONSUBMYSTERYGIFT")
-                    || line.contains("GIFTPAIDUPGRADE")
-                    || line.contains("ANONPAIDGIFTUPGRADE")
-                    || line.contains("PRIMEPAIDUPGRADE")
-                    || line.contains("COMMUNITYPAYFORWARD")
-                    || line.contains("[SUBSCRIPTION]")
-                    || line.contains("[RESUBSCRIPTION]")
-                    {
-                        sub_events += 1;
-                        potentially_chat = true; // Subs often have messages
-                    } else if line.contains("USER_BANNED")
-                        || line.contains("CLEARMSG")
-                        || line.contains("TIMEOUT")
-                        || line.contains("CHAT_CLEARED")
-                        {
-                            mod_events += 1;
-                        } else if line.contains("RAID") {
-                            raid_events += 1;
-                        } else if line.contains("VIEWERMILESTONE") || line.contains("MILESTONE") {
-                            milestone_events += 1;
-                            potentially_chat = true; // Milestones usually have messages
-                        } else if line.contains("ANNOUNCEMENT")
-                            || line.contains("SHAREDCHATNOTICE")
-                            {
-                                other_events += 1;
-                                potentially_chat = true; // Announcements are messages
-                            } else {
-                                // Standard message fallback
-                                potentially_chat = true;
-                            }
-
-                            // If it's a message type we care about, try to extract user and count it
-                            if potentially_chat && line.matches(':').count() >= 2 && line.contains('<') && line.contains('>') {
-                                if let Some(start) = line.find('<') {
-                                    if let Some(end) = line.find('>') {
-                                        if end > start {
-                                            let username = &line[start + 1..end];
-
-                                            // Optional: You might want to filter out "Nightbot" or specific bots here if desired,
-                                            // but standard logic usually counts them.
-
-                                            msg_count += 1;
-                                            unique_chatters.insert(username.to_string());
-                                            *user_message_stats.entry(username.to_string()).or_default() += 1;
-                                        }
-                                    }
-                                }
-                            }
+                if potentially_chat && line.matches(':').count() >= 2 && line.contains('<') && line.contains('>') {
+                    if let Some(start) = line.find('<') { if let Some(end) = line.find('>') { if end > start { let username = &line[start + 1..end]; msg_count += 1; unique_chatters.insert(username.to_string()); *user_message_stats.entry(username.to_string()).or_default() += 1; } } }
+                }
             }
 
-            // --- Stats Formatting (Median & Activity) ---
             let mut sorted_stats: Vec<_> = user_message_stats.into_iter().collect();
-            // Sort by count DESC, then alphabetically
             sorted_stats.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-
-            let user_activity_summary = sorted_stats
-            .iter()
-            .map(|(user, count)| format!("[{}:{}]", user, count))
-            .collect::<Vec<_>>()
-            .join(" ");
-
+            let user_activity_summary = sorted_stats.iter().map(|(user, count)| format!("[{}:{}]", user, count)).collect::<Vec<_>>().join(" ");
+            let mut banned_list_sorted: Vec<_> = banned_users_set.into_iter().collect(); banned_list_sorted.sort();
+            let banned_display = if banned_list_sorted.is_empty() { "None".to_string() } else { banned_list_sorted.join(", ") };
+            let mut timeout_list_sorted: Vec<_> = timeout_users_set.into_iter().collect(); timeout_list_sorted.sort();
+            let timeout_display = if timeout_list_sorted.is_empty() { "None".to_string() } else { timeout_list_sorted.join(", ") };
+            let mut vips_sorted: Vec<_> = seen_vips_set.into_iter().collect(); vips_sorted.sort();
+            let vips_display = if vips_sorted.is_empty() { "None".to_string() } else { vips_sorted.join(", ") };
             let msg_counts: Vec<usize> = sorted_stats.iter().map(|(_, count)| *count).collect();
-
-            let avg_per_chatter = if !msg_counts.is_empty() {
-                msg_counts.iter().sum::<usize>() as f64 / msg_counts.len() as f64
-            } else {
-                0.0
+            let avg_per_chatter = if !msg_counts.is_empty() { msg_counts.iter().sum::<usize>() as f64 / msg_counts.len() as f64 } else { 0.0 };
+            let median_line = if msg_counts.is_empty() { "Median value: N/A".to_string() } else {
+                let mut sorted_counts = msg_counts.clone(); sorted_counts.sort_unstable(); let len = sorted_counts.len();
+                if len % 2 == 1 { format!("Median value: {}", sorted_counts[len / 2]) } else { format!("Median value: {}, {}", sorted_counts[len / 2 - 1], sorted_counts[len / 2]) }
             };
 
-            // Median Calculation (Restored)
-            let median_value = if msg_counts.is_empty() {
-                None
-            } else {
-                let mut sorted_counts = msg_counts.clone();
-                sorted_counts.sort_unstable(); // Ascending
-                let len = sorted_counts.len();
-                if len % 2 == 1 {
-                    Some(format!("{}", sorted_counts[len / 2]))
-                } else {
-                    Some(format!(
-                        "{}, {}",
-                        sorted_counts[len / 2 - 1],
-                        sorted_counts[len / 2]
-                    ))
-                }
-            };
-
-            let median_line = match median_value {
-                Some(m) => format!("Median value: {}", m),
-                None => "Median value: N/A".to_string(),
-            };
-
-            // Construct the Header
             let header = format!(
-                "--- Message/Event Log ---\n# {} {}\n({} messages from {} chatters, {:.1} messages per chatter)\n({} Banns, Deletions, and Timeouts)\n({} Subs/Giftsubs)\n({} Raids)\n({} Milestones)\n({} Others)\nChatter Activity (msg count): {}\n{}\n{}{}\n\n",
-                                 chan,
-                                 file_name,
-                                 msg_count,
-                                 unique_chatters.len(),
-                                 avg_per_chatter,
-                                 mod_events,
-                                 sub_events,
-                                 raid_events,
-                                 milestone_events,
-                                 other_events,
-                                 user_activity_summary,
-                                 median_line,
-                                 "",
-                                 reconnect_warning
+                "--- Message/Event Log ---\n# {} {}\n({} messages from {} chatters, {:.1} messages per chatter)\n({} Banns, Deletions, and Timeouts)\n -> BANNED USERS: {}\n -> TIMED OUT USERS: {}\n({} Subs/Giftsubs)\n({} Raids)\n({} Milestones)\n({} Others)\n -> SEEN VIPS: {}\nChatter Activity (msg count): {}\n{}\n{}{}\n\n",
+                                 chan, file_name, msg_count, unique_chatters.len(), avg_per_chatter, mod_events, banned_display, timeout_display, sub_events, raid_events, milestone_events, other_events, vips_display, user_activity_summary, median_line, "", reconnect_warning
             );
 
-            let numbered_messages = messages
-            .iter()
-            .enumerate()
-            .map(|(i, line)| format!("{}. {}", i + 1, line))
-            .collect::<Vec<_>>()
-            .join("\n");
-
+            let numbered_messages = messages.iter().enumerate().map(|(i, line)| format!("{}. {}", i + 1, line)).collect::<Vec<_>>().join("\n");
             let final_content = format!("{}{}", header, numbered_messages);
+
+            // --- BOM ENFORCEMENT ---
             let mut content_with_bom = vec![0xEF, 0xBB, 0xBF];
             content_with_bom.extend_from_slice(final_content.as_bytes());
 
             if let Ok(mut f) = File::create(&file_path) {
-                if f.write_all(&content_with_bom).is_ok() {
-                    println!("Saved {} messages to {}", messages.len(), file_path.display());
-                }
+                let _ = f.write_all(&content_with_bom);
+                println!("Saved {} messages to {}", messages.len(), file_path.display());
             }
         }
     }
 
-    // --- PART 2: SAVE GLOBAL JOIN/PART LOGS ---
-    // Note: We use the Global Vec (current main.rs architecture)
+    // --- PART 2: SAVE GLOBAL JOIN/PART LOGS (UPDATED WITH BOM) ---
     if !join_logs_locked.is_empty() {
         let save_timestamp = Local::now().format("%d.%m.%Y %H:%M:%S").to_string();
-
-        // We use SESSION_TIMESTAMP for the filename so checks are appended to one file
         let filename = format!("JOIN_PART_LOG_{}.txt", *SESSION_TIMESTAMP);
         let join_file_path = log_dir_path.join(filename);
 
@@ -1329,43 +1233,59 @@ fn save_logs(
             join_logs_locked.join("")
         );
 
-        let write_result = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&join_file_path)
-        .and_then(|mut file| file.write_all(file_chunk.as_bytes()));
-
-        match write_result {
-            Ok(_) => {
-                println!(
-                    "Appended {} global events to {}",
-                    join_logs_locked.len(),
-                         join_file_path.display()
-                );
-                join_logs_locked.clear();
+        // For append mode, we check if file exists. If not, write BOM first.
+        let file_exists = join_file_path.exists();
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&join_file_path) {
+            if !file_exists {
+                let _ = file.write_all(&[0xEF, 0xBB, 0xBF]);
             }
-            Err(e) => {
-                eprintln!("⚠️ Error appending to global log file: {}", e);
+            if file.write_all(file_chunk.as_bytes()).is_ok() {
+                println!("Appended {} global events to {}", join_logs_locked.len(), join_file_path.display());
+                join_logs_locked.clear();
             }
         }
     }
 
-    // --- PART 3: SAVE USER IDs ---
+    // --- PART 3: SAVE USER IDs (UPDATED WITH BOM) ---
     if !user_ids_locked.is_empty() {
-        // We use the same timestamp format
         let filename = format!("USER_IDS_{}.txt", *STARTUP_DATE);
         let id_file_path = log_dir_path.join(filename);
-
 
         let mut file_content = String::new();
         for (name, id) in user_ids_locked.iter() {
             file_content.push_str(&format!("{}: {}\n", name, id));
         }
 
-        // Write to file (Overwrite is safer to ensure the list is always complete and deduped based on current memory)
         if let Ok(mut f) = File::create(&id_file_path) {
-            let _ = f.write_all(file_content.as_bytes());
+            let mut content_with_bom = vec![0xEF, 0xBB, 0xBF];
+            content_with_bom.extend_from_slice(file_content.as_bytes());
+            let _ = f.write_all(&content_with_bom);
             println!("Saved {} User IDs to {}", user_ids_locked.len(), id_file_path.display());
+        }
+    }
+
+    // --- PART 4: SAVE BANS (UPDATED WITH BOM) ---
+    let mut all_bans = Vec::new();
+    for (_chan_name, lines) in logs_locked.iter() {
+        for line in lines {
+            if line.contains("USER_BANNED") {
+                all_bans.push(line.trim().to_string());
+            }
+        }
+    }
+
+    if !all_bans.is_empty() {
+        all_bans.sort();
+        let filename = format!("BANS_{}.txt", *STARTUP_DATE);
+        let ban_file_path = log_dir_path.join(filename);
+        let file_content = all_bans.join("\n");
+
+        if let Ok(mut f) = File::create(&ban_file_path) {
+            let mut content_with_bom = vec![0xEF, 0xBB, 0xBF];
+            content_with_bom.extend_from_slice(file_content.as_bytes());
+            if f.write_all(&content_with_bom).is_ok() {
+                println!("Saved {} ban events to {}", all_bans.len(), ban_file_path.display());
+            }
         }
     }
 }

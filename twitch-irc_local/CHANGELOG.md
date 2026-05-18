@@ -2,6 +2,41 @@
 
 Version numbers follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+## v6.0.0
+
+- Breaking: Fixed a erroneous implementation of the IRCv3 tags: This crate now no longer differentiates
+  between empty and missing IRCv3 tag values (e.g. `@key` is equivalent to `@key=`). The type of the
+  `IRCTags` struct has changed to hold a `HashMap<String, String>` instead of a `HashMap<String, Option<String>>`.
+
+  Where as re-stringifying messages with the above distinction was flawless before, this information
+  is now intentionally discarded during parsing. This means `@key=` becomes `@key` if the message is parsed
+  and re-stringified (This is the recommended way, according to the standard).
+
+  See also: #186 and #196
+- Breaking: Removed `ban()`, `unban()`, `timeout()` and `untimeout()` since they are no longer supported by Twitch.
+  They were previously deprecated in v4.1.0 (#197)
+- Breaking: Fixed typo in RoomStateMessage's follower mode (was `follwers_only`, is now `followers_only`). (#200)
+- Breaking: `SubMysteryGift::sender_total_gifts` is now an `Option` because the tag is missing
+  when Twitch gift subs during SUBtember (#215)
+- Breaking: In `twitch_irc::transport::websocket::WSTransport`, the error types have been changed from
+  `tungstenite::error::Error` to `Box<tungstenite::error::Error>` to reduce the size of the error variant in the data
+  pipeline. (#221)
+- Breaking: Update to `async-tungstenite` v0.34, `reqwest` v0.13, `tokio-rustls` v0.26, `webpki-roots` v1. (#222)
+  - With this, the feature flags `refreshing-token-rustls-native-roots`, `transport-tcp-rustls-native-roots` and `transport-ws-rustls-native-roots` now use `rustls-platform-verifier` instead of
+    `rustls-native-certs` now (see [the
+    docs](https://github.com/rustls/rustls-platform-verifier?tab=readme-ov-file#deployment-considerations) for further
+    reading).
+- Breaking: Update to `prometheus` 0.14 (Careful, if you have multiple versions of `prometheus` in your crate, some of
+  your metrics will go missing, because the default global registry lives inside the library.)
+- Minor: Added support for reply-parent tags (#189)
+- Minor: Tokens in `CredentialsPair` and `UserAccessToken` are now redacted in their `Debug` output. Same
+  applies to the `client_secret` in `RefreshingLoginCredentials`. (#199)
+- Minor: Added example demonstrating usage of `metrics-collection` feature as well as an exemplary grafana
+  dashboard template. (#203, #208)
+- Dev: Updated Rust edition to 2024. (#219)
+
 ## v5.0.1
 
 - Minor: Removed unused features from the `chrono` dependency (#185)
@@ -37,7 +72,7 @@ Version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## v4.1.0
 
-- Minor: Mark `ban`, `unban`, `timeout` and `untimeout` methods as deprecated (Due to Twitch removing support for these commands on 2023-02-18: https://discuss.dev.twitch.tv/t/deprecation-of-chat-commands-through-irc/40486) (#181)
+- Minor: Mark `ban`, `unban`, `timeout` and `untimeout` methods as deprecated (Due to Twitch removing support for these commands on 2023-02-18: <https://discuss.dev.twitch.tv/t/deprecation-of-chat-commands-through-irc/40486>) (#181)
 
 ## v4.0.0
 
@@ -61,9 +96,9 @@ Version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## v3.0.0
 
-- Breaking: Transports were refactored slightly:  
-  Renamed `twitch_irc::TCPTransport` to `SecureTCPTransport`, added `PlainTCPTransport` for plain-text IRC connections.  
-  Renamed `twitch_irc::WSSTransport` to `SecureWSTransport`, added `PlainWSTransport` for plain-text IRC-over-WebSocket-connections.  
+- Breaking: Transports were refactored slightly:
+  Renamed `twitch_irc::TCPTransport` to `SecureTCPTransport`, added `PlainTCPTransport` for plain-text IRC connections.
+  Renamed `twitch_irc::WSSTransport` to `SecureWSTransport`, added `PlainWSTransport` for plain-text IRC-over-WebSocket-connections.
   Refactored feature flags: This crate used to only have the `transport-tcp` and `transport-wss` feature flags. The following is the new list of feature flags relevant to transports:
   - `transport-tcp` enables `PlainTCPTransport`
   - `transport-tcp-native-tls` enables `SecureTCPTransport` using OS-native TLS functionality (and using the root certificates configured in your operating system).
@@ -72,7 +107,7 @@ Version numbers follow [Semantic Versioning](https://semver.org/).
   - `transport-ws` (notice this is now `ws` instead of `wss`) - Enables `PlainWSTransport`
   - `transport-ws-native-tls` - Enables `SecureWSTransport` using native TLS (same as above)
   - `transport-ws-rustls-webpki-roots` - Enables `SecureWSTransport` using rustls with Mozilla's root certificates (same as above)
-  
+
   Some accompanying items have also been made `pub` in the crate.
 - Breaking: Updated `metrics` to version 0.16.
 - Minor: Added `timeout`, `untimeout`, `ban` and `unban` methods to `TwitchIRCClient` (#110)

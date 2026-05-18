@@ -209,21 +209,13 @@ pub enum UserNoticeEvent {
 
     /// This event precedes a wave of `subgift`/`anonsubgift` messages.
     /// (`<User> is gifting <mass_gift_count> Tier 1 Subs to <Channel>'s community! They've gifted a total of <sender_total_gifts> in the channel!`)
-    ///
-    /// This event combines `submysterygift` and `anonsubmysterygift`. In case of
-    /// `anonsubmysterygift` the sending user of the `USERNOTICE` carries no useful information,
-    /// it can be e.g. the channel owner or a service user like `AnAnonymousGifter`. You should
-    /// always check for `is_sender_anonymous` before using the sender of the `USERNOTICE`.
     SubMysteryGift {
-        /// Indicates whether the user sending this `USERNOTICE` is a dummy or a real gifter.
-        /// If this is `true` the gift comes from an anonymous user, and the user sending the
-        /// `USERNOTICE` carries no useful information and should be ignored.
         /// Number of gifts the sender just gifted.
         mass_gift_count: u64,
         /// Total number of gifts the sender has gifted in this channel. This includes the
         /// number of gifts in this `submysterygift` or `anonsubmysterygift`.
-        /// Note tha
-        sender_total_gifts: u64,
+        /// Present in most case, but notably missing when Twitch match gifted subs during SUBtember.
+        sender_total_gifts: Option<u64>,
         /// The type of sub plan the recipients were gifted.
         /// `1000`, `2000` or `3000`, referring to tier 1, 2 or 3 subs respectively.
         sub_plan: String,
@@ -303,7 +295,7 @@ impl TryFrom<IRCMessage> for UserNoticeMessage {
 
     fn try_from(source: IRCMessage) -> Result<UserNoticeMessage, ServerMessageParseError> {
         if source.command != "USERNOTICE" {
-            return Err(ServerMessageParseError::MismatchedCommand(source));
+            return Err(ServerMessageParseError::MismatchedCommand(Box::new(source)));
         }
 
         // example message:
@@ -424,7 +416,12 @@ impl TryFrom<IRCMessage> for UserNoticeMessage {
             // this takes over all other cases of submysterygift.
             "submysterygift" => UserNoticeEvent::SubMysteryGift {
                 mass_gift_count: source.try_get_number("msg-param-mass-gift-count")?,
-                sender_total_gifts: source.try_get_number("msg-param-sender-count")?,
+                sender_total_gifts: if sender.login != "twitch" {
+                    Some(source.try_get_number("msg-param-sender-count")?)
+                } else {
+                    //  - this seems to be missing if sender the sender is twitch (user-id=12826) on subtembers
+                    source.try_get_number("msg-param-sender-count").ok()
+                },
                 sub_plan: source
                     .try_get_nonempty_tag_value("msg-param-sub-plan")?
                     .to_owned(),
@@ -500,7 +497,7 @@ impl TryFrom<IRCMessage> for UserNoticeMessage {
             emotes,
             name_color: source.try_get_color("color")?,
             message_id: source.try_get_nonempty_tag_value("id")?.to_owned(),
-            server_timestamp: source.try_get_timestamp("tmi-sent-ts")?.to_owned(),
+            server_timestamp: source.try_get_timestamp("tmi-sent-ts")?,
             source,
         })
     }
@@ -563,10 +560,10 @@ mod tests {
                 emotes: vec![],
                 name_color: None,
                 message_id: "2a9bea11-a80a-49a0-a498-1642d457f775".to_owned(),
-                server_timestamp: Utc.timestamp_millis_opt(1582685713242).unwrap(),
+                server_timestamp: Utc.timestamp_millis_opt(1_582_685_713_242).unwrap(),
                 source: irc_message,
             }
-        )
+        );
     }
 
     #[test]
@@ -622,10 +619,10 @@ mod tests {
                     b: 0xFF,
                 }),
                 message_id: "e0975c76-054c-4954-8cb0-91b8867ec1ca".to_owned(),
-                server_timestamp: Utc.timestamp_millis_opt(1581713640019).unwrap(),
+                server_timestamp: Utc.timestamp_millis_opt(1_581_713_640_019).unwrap(),
                 source: irc_message,
             }
-        )
+        );
     }
 
     #[test]
@@ -668,10 +665,10 @@ mod tests {
                     b: 0xE2,
                 }),
                 message_id: "ca1f02fb-77ec-487d-a9b3-bc4bfef2fe8b".to_owned(),
-                server_timestamp: Utc.timestamp_millis_opt(1590628650446).unwrap(),
+                server_timestamp: Utc.timestamp_millis_opt(1_590_628_650_446).unwrap(),
                 source: irc_message,
             }
-        )
+        );
     }
 
     #[test]
@@ -714,7 +711,7 @@ mod tests {
                 sub_plan_name: "Channel Subscription (xqcow)".to_owned(),
                 num_gifted_months: 1,
             }
-        )
+        );
     }
 
     #[test]
@@ -737,7 +734,7 @@ mod tests {
                 sub_plan_name: "Channel Subscription (xqcow)".to_owned(),
                 num_gifted_months: 1,
             }
-        )
+        );
     }
 
     #[test]
@@ -762,7 +759,7 @@ mod tests {
                 sub_plan_name: "Channel Subscription (xqcow)".to_owned(),
                 num_gifted_months: 1,
             }
-        )
+        );
     }
 
     #[test]
@@ -775,10 +772,42 @@ mod tests {
             msg.event,
             UserNoticeEvent::SubMysteryGift {
                 mass_gift_count: 20,
-                sender_total_gifts: 100,
+                sender_total_gifts: Some(100),
                 sub_plan: "1000".to_owned(),
             }
-        )
+        );
+    }
+
+    #[test]
+    pub fn test_submysterygift_twitch() {
+        let src = "@badge-info=;badges=sub-gifter/50;color=;display-name=twitch;emotes=;flags=;id=049e6371-7023-4fca-8605-7dec60e72e12;login=twitch;mod=0;msg-id=submysterygift;msg-param-mass-gift-count=20;msg-param-sender-count=50;msg-param-origin-id=1f\\sbe\\sbb\\s4a\\s81\\s9a\\s65\\sd1\\s4b\\s77\\sf5\\s23\\s16\\s4a\\sd3\\s13\\s09\\se7\\sbe\\s55;msg-param-sub-plan=1000;room-id=71092938;subscriber=0;system-msg=AdamAtReflectStudios\\sis\\sgifting\\s20\\sTier\\s1\\sSubs\\sto\\sxQcOW's\\scommunity!\\sThey've\\sgifted\\sa\\stotal\\sof\\s100\\sin\\sthe\\schannel!;tmi-sent-ts=1594583777669;user-id=12826;user-type= :tmi.twitch.tv USERNOTICE #xqcow";
+        let irc_message = IRCMessage::parse(src).unwrap();
+        let msg = UserNoticeMessage::try_from(irc_message).unwrap();
+
+        assert_eq!(
+            msg.event,
+            UserNoticeEvent::SubMysteryGift {
+                mass_gift_count: 20,
+                sender_total_gifts: Some(50),
+                sub_plan: "1000".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    pub fn test_submysterygift_twitch_missing_count() {
+        let src = "@badge-info=;badges=sub-gifter/50;color=;display-name=twitch;emotes=;flags=;id=049e6371-7023-4fca-8605-7dec60e72e12;login=twitch;mod=0;msg-id=submysterygift;msg-param-mass-gift-count=20;msg-param-origin-id=1f\\sbe\\sbb\\s4a\\s81\\s9a\\s65\\sd1\\s4b\\s77\\sf5\\s23\\s16\\s4a\\sd3\\s13\\s09\\se7\\sbe\\s55;msg-param-sub-plan=1000;room-id=71092938;subscriber=0;system-msg=AdamAtReflectStudios\\sis\\sgifting\\s20\\sTier\\s1\\sSubs\\sto\\sxQcOW's\\scommunity!\\sThey've\\sgifted\\sa\\stotal\\sof\\s100\\sin\\sthe\\schannel!;tmi-sent-ts=1594583777669;user-id=12826;user-type= :tmi.twitch.tv USERNOTICE #xqcow";
+        let irc_message = IRCMessage::parse(src).unwrap();
+        let msg = UserNoticeMessage::try_from(irc_message).unwrap();
+
+        assert_eq!(
+            msg.event,
+            UserNoticeEvent::SubMysteryGift {
+                mass_gift_count: 20,
+                sender_total_gifts: None,
+                sub_plan: "1000".to_owned(),
+            }
+        );
     }
 
     #[test]
@@ -793,7 +822,7 @@ mod tests {
                 mass_gift_count: 10,
                 sub_plan: "1000".to_owned(),
             }
-        )
+        );
     }
 
     #[test]
@@ -810,7 +839,7 @@ mod tests {
                 mass_gift_count: 15,
                 sub_plan: "2000".to_owned(),
             }
-        )
+        );
     }
 
     #[test]
@@ -827,7 +856,7 @@ mod tests {
                 gifter_name: "Stridezgum".to_owned(),
                 promotion: None,
             }
-        )
+        );
     }
 
     #[test]
@@ -849,7 +878,7 @@ mod tests {
                     total_gifts: 4003,
                 }),
             }
-        )
+        );
     }
 
     #[test]
@@ -862,7 +891,7 @@ mod tests {
         assert_eq!(
             msg.event,
             UserNoticeEvent::AnonGiftPaidUpgrade { promotion: None }
-        )
+        );
     }
 
     #[test]
@@ -881,7 +910,7 @@ mod tests {
                     total_gifts: 4003,
                 })
             }
-        )
+        );
     }
 
     #[test]
@@ -895,7 +924,7 @@ mod tests {
             UserNoticeEvent::Ritual {
                 ritual_name: "new_chatter".to_owned()
             }
-        )
+        );
     }
 
     #[test]
@@ -907,7 +936,7 @@ mod tests {
         assert_eq!(
             msg.event,
             UserNoticeEvent::BitsBadgeTier { threshold: 1000 }
-        )
+        );
     }
 
     #[test]
@@ -917,7 +946,7 @@ mod tests {
         let irc_message = IRCMessage::parse(src).unwrap();
         let msg = UserNoticeMessage::try_from(irc_message).unwrap();
 
-        assert_eq!(msg.event, UserNoticeEvent::Unknown)
+        assert_eq!(msg.event, UserNoticeEvent::Unknown);
     }
 
     #[test]
@@ -950,6 +979,6 @@ mod tests {
                     code: " :".to_owned(),
                 },
             ]
-        )
+        );
     }
 }

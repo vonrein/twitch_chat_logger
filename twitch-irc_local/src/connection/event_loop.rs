@@ -3,9 +3,9 @@ use crate::connection::ConnectionIncomingMessage;
 use crate::error::Error;
 use crate::irc;
 use crate::login::{CredentialsPair, LoginCredentials};
-use crate::message::commands::ServerMessage;
 use crate::message::AsRawIRC;
 use crate::message::IRCMessage;
+use crate::message::commands::ServerMessage;
 #[cfg(feature = "metrics-collection")]
 use crate::metrics::MetricsBundle;
 use crate::transport::Transport;
@@ -16,8 +16,8 @@ use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::sync::{Arc, Weak};
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{interval_at, Duration, Instant};
-use tracing::{debug_span, info_span, Instrument};
+use tokio::time::{Duration, Instant, interval_at};
+use tracing::{Instrument, debug_span, info_span};
 
 #[derive(Debug)]
 pub(crate) enum ConnectionLoopCommand<T: Transport, L: LoginCredentials> {
@@ -134,7 +134,7 @@ impl<T: Transport, L: LoginCredentials> ConnectionLoopWorker<T, L> {
                     t_result.map_err(Arc::new)
                         .map_err(Error::ConnectError)
                 },
-                _ = timeout => {
+                () = timeout => {
                     Err(Error::ConnectTimeout)
                 }
             }?;
@@ -169,7 +169,7 @@ impl<T: Transport, L: LoginCredentials> ConnectionLoopWorker<T, L> {
         while let Some(command) = self.connection_loop_rx.recv().await {
             self = self.process_command(command);
         }
-        tracing::debug!("Connection event loop ended")
+        tracing::debug!("Connection event loop ended");
     }
 
     /// Process a command, consuming the current state and returning a new state
@@ -206,7 +206,7 @@ impl<T: Transport, L: LoginCredentials> ConnectionLoopWorker<T, L> {
             ConnectionLoopCommand::CheckPong() => {
                 self.state = self.state.check_pong();
             }
-        };
+        }
         self
     }
 }
@@ -233,7 +233,7 @@ impl<T: Transport, L: LoginCredentials> ConnectionLoopInitializingState<T, L> {
     fn transition_to_closed(self, err: Error<T, L>) -> ConnectionLoopState<T, L> {
         tracing::info!("Closing connection, reason: {}", err);
 
-        for (_message, return_sender) in self.commands_queue.into_iter() {
+        for (_message, return_sender) in self.commands_queue {
             if let Some(return_sender) = return_sender {
                 return_sender.send(Err(err.clone())).ok();
             }
@@ -294,12 +294,12 @@ impl<T: Transport, L: LoginCredentials> ConnectionLoopInitializingState<T, L> {
 
             // The error is cloned and sent both to the calling method as well as
             // the connection event loop so it can end with that error.
-            if let Err(ref err) = res {
-                if let Some(connection_loop_tx) = connection_loop_tx.upgrade() {
-                    connection_loop_tx
-                        .send(ConnectionLoopCommand::SendError(Arc::clone(err)))
-                        .ok();
-                }
+            if let Err(ref err) = res
+                && let Some(connection_loop_tx) = connection_loop_tx.upgrade()
+            {
+                connection_loop_tx
+                    .send(ConnectionLoopCommand::SendError(Arc::clone(err)))
+                    .ok();
             }
 
             if let Some(reply_sender) = reply_sender {
@@ -417,7 +417,7 @@ impl<T: Transport, L: LoginCredentials> ConnectionLoopStateMethods<T, L>
                 });
 
                 new_state.send_message(
-                    irc!["CAP", "REQ", "twitch.tv/tags twitch.tv/commands"],
+                    irc!["CAP", "REQ", "twitch.tv/tags twitch.tv/commands twitch.tv/membership"],
                     None,
                 );
                 if let Some(token) = credentials.token {
@@ -425,9 +425,7 @@ impl<T: Transport, L: LoginCredentials> ConnectionLoopStateMethods<T, L>
                 }
                 new_state.send_message(irc!["NICK", credentials.login], None);
 
-                new_state.send_message(irc!["CAP", "REQ", "twitch.tv/membership"], None);
-
-                for (message, return_sender) in self.commands_queue.into_iter() {
+                for (message, return_sender) in self.commands_queue {
                     new_state.send_message(message, return_sender);
                 }
 
@@ -579,7 +577,10 @@ impl<T: Transport, L: LoginCredentials> ConnectionLoopStateMethods<T, L>
                         }
                     }
                     Err(parse_error) => {
-                        tracing::error!("Failed to parse incoming message as ServerMessage (emitting as generic instead): {}", parse_error);
+                        tracing::error!(
+                            "Failed to parse incoming message as ServerMessage (emitting as generic instead): {}",
+                            parse_error
+                        );
                         self.connection_incoming_tx
                             .send(ConnectionIncomingMessage::IncomingMessage(Box::new(
                                 ServerMessage::new_generic(IRCMessage::from(parse_error)),
@@ -600,12 +601,12 @@ impl<T: Transport, L: LoginCredentials> ConnectionLoopStateMethods<T, L>
     }
 
     fn check_pong(self) -> ConnectionLoopState<T, L> {
-        if !self.pong_received {
-            // close down
-            self.transition_to_closed(Error::PingTimeout)
-        } else {
+        if self.pong_received {
             // stay open
             ConnectionLoopState::Open(self)
+        } else {
+            // close down
+            self.transition_to_closed(Error::PingTimeout)
         }
     }
 }

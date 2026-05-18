@@ -32,7 +32,7 @@ impl TryFrom<IRCMessage> for WhisperMessage {
 
     fn try_from(source: IRCMessage) -> Result<WhisperMessage, ServerMessageParseError> {
         if source.command != "WHISPER" {
-            return Err(ServerMessageParseError::MismatchedCommand(source));
+            return Err(ServerMessageParseError::MismatchedCommand(Box::new(source)));
         }
 
         // example:
@@ -101,7 +101,7 @@ mod tests {
                 }],
                 source: irc_message
             },
-        )
+        );
     }
 
     // note, I have tested and there is no support for \u0001ACTION <message>\u0001 style actions

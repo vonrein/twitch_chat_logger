@@ -9,10 +9,9 @@ use async_tungstenite::tungstenite::Error as WSError;
 use async_tungstenite::tungstenite::Message as WSMessage;
 use either::Either;
 use futures_util::{
-    future,
+    SinkExt, StreamExt, TryStreamExt, future,
     sink::Sink,
     stream::{self, FusedStream},
-    SinkExt, StreamExt, TryStreamExt,
 };
 use smallvec::SmallVec;
 
@@ -30,16 +29,18 @@ use smallvec::SmallVec;
         feature = "transport-ws-rustls-webpki-roots"
     ),
 ))]
-compile_error!("`transport-ws-native-tls`, `transport-ws-rustls-native-roots` and `transport-ws-rustls-webpki-roots` feature flags are mutually exclusive, enable at most one of them");
+compile_error!(
+    "`transport-ws-native-tls`, `transport-ws-rustls-native-roots` and `transport-ws-rustls-webpki-roots` feature flags are mutually exclusive, enable at most one of them"
+);
 
-/// Parameterizes [`WSTransport`](WSTransport) with either the `ws:` or `wss:` URI to connect
+/// Parameterizes [`WSTransport`] with either the `ws:` or `wss:` URI to connect
 /// either using plain-text or secured by TLS.
 pub trait ConnectionUri: 'static {
     /// Get what server URI to connect to, according to this implementation.
     fn get_server_uri() -> &'static str;
 }
 
-/// Provides [`WSTransport`](WSTransport) with the `wss:` URI for securely connecting to Twitch
+/// Provides [`WSTransport`] with the `wss:` URI for securely connecting to Twitch
 /// services.
 pub struct TLS;
 
@@ -49,7 +50,7 @@ impl ConnectionUri for TLS {
     }
 }
 
-/// Provides [`WSTransport`](WSTransport) with the `wss:` URI for connecting to Twitch services
+/// Provides [`WSTransport`] with the `ws:` URI for connecting to Twitch services
 /// with a plain-text WebSocket connection.
 pub struct NoTLS;
 
@@ -82,38 +83,40 @@ pub struct WSTransport<C: ConnectionUri> {
 
 #[async_trait]
 impl<C: ConnectionUri> Transport for WSTransport<C> {
-    type ConnectError = WSError;
-    type IncomingError = WSError;
-    type OutgoingError = WSError;
+    type ConnectError = Box<WSError>;
+    type IncomingError = Box<WSError>;
+    type OutgoingError = Box<WSError>;
 
     type Incoming = Box<
-        dyn FusedStream<Item = Result<IRCMessage, Either<WSError, IRCParseError>>>
+        dyn FusedStream<Item = Result<IRCMessage, Either<Self::IncomingError, IRCParseError>>>
             + Unpin
             + Send
             + Sync,
     >;
     type Outgoing = Box<dyn Sink<IRCMessage, Error = Self::OutgoingError> + Unpin + Send + Sync>;
 
-    async fn new() -> Result<WSTransport<C>, WSError> {
+    async fn new() -> Result<WSTransport<C>, Self::ConnectError> {
         let (ws_stream, _response) = connect_async(C::get_server_uri()).await?;
 
         let (write_half, read_half) = ws_stream.split();
 
         let message_stream = read_half
-            .map_err(Either::Left)
+            .map_err(|ws_err| Either::Left(Box::new(ws_err)))
             .try_filter_map(|ws_message| {
-                future::ready(Ok::<_, Either<WSError, IRCParseError>>(
-                    if let WSMessage::Text(text) = ws_message {
-                        // the server can send multiple IRC messages in one websocket message,
-                        // separated by newlines
-                        Some(stream::iter(
-                            text.lines()
-                                .map(|l| Ok(String::from(l)))
-                                .collect::<SmallVec<[Result<String, _>; 1]>>(),
-                        ))
-                    } else {
-                        None
-                    },
+                future::ready(match ws_message {
+                    WSMessage::Text(text) => Ok(Some(text)),
+                    _ => Ok(None),
+                })
+            })
+            .try_filter_map(|text| {
+                future::ready(Ok::<_, Either<Self::IncomingError, IRCParseError>>(
+                    // the server can send multiple IRC messages in one websocket message,
+                    // separated by newlines
+                    Some(stream::iter(
+                        text.lines()
+                            .map(|l| Ok(String::from(l)))
+                            .collect::<SmallVec<[Result<String, _>; 1]>>(),
+                    )),
                 ))
             })
             .try_flatten()
@@ -122,8 +125,9 @@ impl<C: ConnectionUri> Transport for WSTransport<C> {
             .and_then(|s| future::ready(IRCMessage::parse(&s).map_err(Either::Right)))
             .fuse();
 
-        let message_sink = write_half
-            .with(move |msg: IRCMessage| future::ready(Ok(WSMessage::Text(msg.as_raw_irc()))));
+        let message_sink = write_half.with(move |msg: IRCMessage| {
+            future::ready(Ok(WSMessage::Text(msg.as_raw_irc().into())))
+        });
 
         Ok(WSTransport {
             incoming_messages: Box::new(message_stream),

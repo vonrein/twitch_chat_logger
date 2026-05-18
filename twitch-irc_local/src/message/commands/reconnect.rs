@@ -1,6 +1,6 @@
+use crate::message::IRCMessage;
 use crate::message::commands::ServerMessageParseError;
 use crate::message::commands::ServerMessageParseError::MismatchedCommand;
-use crate::message::IRCMessage;
 use std::convert::TryFrom;
 
 #[cfg(feature = "with-serde")]
@@ -21,7 +21,7 @@ impl TryFrom<IRCMessage> for ReconnectMessage {
         if source.command == "RECONNECT" {
             Ok(ReconnectMessage { source })
         } else {
-            Err(MismatchedCommand(source))
+            Err(MismatchedCommand(Box::new(source)))
         }
     }
 }
@@ -48,6 +48,6 @@ mod tests {
             ReconnectMessage {
                 source: irc_message
             }
-        )
+        );
     }
 }

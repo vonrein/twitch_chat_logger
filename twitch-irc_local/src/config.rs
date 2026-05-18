@@ -32,7 +32,7 @@ pub struct ClientConfig<L: LoginCredentials> {
     /// permit, then that many connections can be opened in parallel.
     ///
     /// This is designed to be wrapped in an Arc to allow it to be shared between multiple
-    /// TwitchIRCClient instances.
+    /// `TwitchIRCClient` instances.
     pub connection_rate_limiter: Arc<Semaphore>,
 
     /// Allow a new connection to be made after this period has elapsed. By default this is set
@@ -65,8 +65,8 @@ pub struct ClientConfig<L: LoginCredentials> {
     ///   that channel is additionally `confirmed`.
     ///
     /// * `twitchirc_connections` counts how many connections this client has in use (Gauge).
-    ///    The label `state=initializing/open` identifies how many connections are
-    ///    in the process of connecting (`initializing`) vs how many connections are already established (`open`).
+    ///   The label `state=initializing/open` identifies how many connections are
+    ///   in the process of connecting (`initializing`) vs how many connections are already established (`open`).
     ///
     /// * `twitchirc_connections_failed` counts every time a connection fails (Counter). Note however, depending
     ///   on conditions e.g. how many channels were joined on that channel, there can be cases where
@@ -76,6 +76,9 @@ pub struct ClientConfig<L: LoginCredentials> {
     ///
     /// * `twitchirc_connections_created` on the other hand tracks how many times, since
     ///   the creation of the client, a new connection has been made.
+    ///
+    /// Also see the `metrics` example in the `examples` directory of the repository, which contains
+    /// further help for getting up to speed with this feature.
     #[cfg(feature = "metrics-collection")]
     pub metrics_config: MetricsConfig,
 
@@ -120,6 +123,8 @@ pub struct ClientConfig<L: LoginCredentials> {
 }
 
 /// Used to configure the options around metrics collection using the `prometheus` crate.
+///
+/// For more details, see [`ClientConfig::metrics_config`].
 #[cfg(feature = "metrics-collection")]
 #[derive(Debug)]
 pub enum MetricsConfig {
