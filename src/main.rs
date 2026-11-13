@@ -1,8 +1,6 @@
 use rustyline::Editor;
 use rustyline::history::DefaultHistory;
 
-
-
 mod completer;
 use completer::CommandCompleter;
 
@@ -17,7 +15,7 @@ use owo_colors::OwoColorize;
 use rustyline::error::ReadlineError;
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet,BTreeMap, BTreeSet},
     fs::{File, create_dir_all, read_to_string},
     io::{self,Write},
     sync::{Arc, Mutex},
@@ -39,7 +37,6 @@ use sound::{play_sound};
 use home;
 use rand::RngExt;
 
-
 //#[cfg(not(target_os = "windows"))] // Only use on Linux/Unix
 //use tikv_jemallocator::Jemalloc;
 
@@ -48,104 +45,99 @@ use rand::RngExt;
 //static GLOBAL: Jemalloc = Jemalloc;
 
 static RANDOM_COLORS: Lazy<Mutex<HashMap<String, (u8, u8, u8)>>> = Lazy::new(|| {
-    Mutex::new(HashMap::new())
+        Mutex::new(HashMap::new())
 });
 
 fn get_or_assign_channel_color(channel: &str) -> (u8, u8, u8) {
     let mut colors = RANDOM_COLORS.lock().unwrap();
     *colors.entry(channel.to_string()).or_insert_with(|| {
-        let mut rng = rand::rng();
-        let (r, g, b): (u8, u8, u8) = (rng.random(), rng.random(), rng.random());
-        println!("Assigned random color for {}: #{:02X}{:02X}{:02X}",channel.truecolor(r, g, b), r, g, b);
-        (r, g, b)
+            let mut rng = rand::rng();
+            let (r, g, b): (u8, u8, u8) = (rng.random(), rng.random(), rng.random());
+            println!("Assigned random color for {}: #{:02X}{:02X}{:02X}",channel.truecolor(r, g, b), r, g, b);
+            (r, g, b)
     })
 }
 
-
 static CONFIG: Lazy<ChannelConfig> = Lazy::new(|| {
-    let config_path = match home::home_dir() {
-        Some(mut path) => {
-            path.push(".rustTwitchLogger/channels.txt");
-            path
-        }
-        None => {
-            eprintln!("⚠️ Error: Unable to find the home directory to load channels.txt.");
-            process::exit(1);
-        }
-    };
-
-    // Convert the PathBuf to a &str, handling the possibility of an error.
-    if let Some(path_str) = config_path.to_str() {
-        match load_channel_config(path_str) { // <-- Now passing a valid &str
-            Ok(cfg) => cfg,
-                                               Err(e) => {
-                                                   eprintln!(
-                                                       "⚠️ Error: Failed to load configuration from '{}': {}",
-                                                       config_path.display(),
-                                                             e
-                                                   );
-                                                   process::exit(1);
-                                               }
-        }
-    } else {
-        eprintln!(
-            "⚠️ Error: The configuration path '{}' is not valid UTF-8.",
-            config_path.display()
-        );
-        process::exit(1);
-    }
-});
-
-
-static STARTUP_DATE: Lazy<String> = Lazy::new(|| {
-    let now = Utc::now().with_timezone(&Berlin);
-    // Get the abbreviated weekday (e.g., "Sa")
-    let day_abbr = &now.format("%a").to_string()[0..2];
-    format!("{}_{}", day_abbr, now.format("%d_%m_%Y"))
-});
-
-
-static SESSION_TIMESTAMP: Lazy<String> = Lazy::new(|| {
-    let now = Utc::now().with_timezone(&Berlin);
-    // Format: Day_Date_Time (e.g., Mon_26_10_2025_17-06-33)
-    let day_abbr = &now.format("%a").to_string()[0..2];
-    format!("{}_{}_{}", day_abbr, now.format("%d_%m_%Y"), now.format("%H-%M-%S"))
-});
-
-
-static LOG_DIRECTORY: Lazy<String> = Lazy::new(|| {
-    let config_path = match home::home_dir() {
-        Some(mut path) => {
-            path.push(".rustTwitchLogger/log_path.txt");
-            path
-        }
-        None => {
-            eprintln!("⚠️ Error: Unable to find the home directory. Defaulting log path to /tmp.");
-            return "/tmp".to_string();
-        }
-    };
-
-    match read_to_string(&config_path) {
-        Ok(path_str) => {
-            let trimmed_path = path_str.trim().to_string();
-            if trimmed_path.is_empty() {
-                eprintln!("⚠️ Warning: log_path.txt is empty. Defaulting log path to /tmp.");
-                "/tmp".to_string()
-            } else {
-                println!("✅ Log directory set to: {}", trimmed_path.cyan());
-                trimmed_path
+        let config_path = match home::home_dir() {
+            Some(mut path) => {
+                path.push(".rustTwitchLogger/channels.txt");
+                path
             }
-        }
-        Err(_) => {
+            None => {
+                eprintln!("⚠️ Error: Unable to find the home directory to load channels.txt.");
+                process::exit(1);
+            }
+        };
+
+        // Convert the PathBuf to a &str, handling the possibility of an error.
+        if let Some(path_str) = config_path.to_str() {
+            match load_channel_config(path_str) { // <-- Now passing a valid &str
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    eprintln!(
+                        "⚠️ Error: Failed to load configuration from '{}': {}",
+                        config_path.display(),
+                        e
+                    );
+                    process::exit(1);
+                }
+            }
+        } else {
             eprintln!(
-                "⚠️ Warning: No log_path.txt found at {}. Defaulting log path to /tmp.",
+                "⚠️ Error: The configuration path '{}' is not valid UTF-8.",
                 config_path.display()
             );
-            "/tmp".to_string()
+            process::exit(1);
         }
-    }
 });
 
+static STARTUP_DATE: Lazy<String> = Lazy::new(|| {
+        let now = Utc::now().with_timezone(&Berlin);
+        // Get the abbreviated weekday (e.g., "Sa")
+        let day_abbr = &now.format("%a").to_string()[0..2];
+        format!("{}_{}", day_abbr, now.format("%d_%m_%Y"))
+});
+
+static SESSION_TIMESTAMP: Lazy<String> = Lazy::new(|| {
+        let now = Utc::now().with_timezone(&Berlin);
+        // Format: Day_Date_Time (e.g., Mon_26_10_2025_17-06-33)
+        let day_abbr = &now.format("%a").to_string()[0..2];
+        format!("{}_{}_{}", day_abbr, now.format("%d_%m_%Y"), now.format("%H-%M-%S"))
+});
+
+static LOG_DIRECTORY: Lazy<String> = Lazy::new(|| {
+        let config_path = match home::home_dir() {
+            Some(mut path) => {
+                path.push(".rustTwitchLogger/log_path.txt");
+                path
+            }
+            None => {
+                eprintln!("⚠️ Error: Unable to find the home directory. Defaulting log path to /tmp.");
+                return "/tmp".to_string();
+            }
+        };
+
+        match read_to_string(&config_path) {
+            Ok(path_str) => {
+                let trimmed_path = path_str.trim().to_string();
+                if trimmed_path.is_empty() {
+                    eprintln!("⚠️ Warning: log_path.txt is empty. Defaulting log path to /tmp.");
+                    "/tmp".to_string()
+                } else {
+                    println!("✅ Log directory set to: {}", trimmed_path.cyan());
+                    trimmed_path
+                }
+            }
+            Err(_) => {
+                eprintln!(
+                    "⚠️ Warning: No log_path.txt found at {}. Defaulting log path to /tmp.",
+                    config_path.display()
+                );
+                "/tmp".to_string()
+            }
+        }
+});
 
 // --- Command-Line Argument Parser ---
 #[derive(Parser, Debug)]
@@ -208,11 +200,11 @@ fn send_desktop_notification(summary: &str, body: &str, timeout_ms: Option<u32>,
 }
 
 static NOTIFICATION_STATE: Lazy<Mutex<NotificationState>> = Lazy::new(|| {
-    Mutex::new(NotificationState {
-        // Initialize to the distant past so the first notification isn't affected
-        last_shown: Instant::now() - Duration::from_secs(999),
-               last_duration_ms: 0,
-    })
+        Mutex::new(NotificationState {
+                // Initialize to the distant past so the first notification isn't affected
+                last_shown: Instant::now() - Duration::from_secs(999),
+                last_duration_ms: 0,
+        })
 });
 
 struct NotificationState {
@@ -223,9 +215,7 @@ struct NotificationState {
 // --- Main Application Logic ---
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    println!("last update: 16.05.26");
-
-
+    println!("last update: 09.11.26");
 
     use tokio::sync::oneshot;
     let cli = Cli::parse();
@@ -240,7 +230,6 @@ async fn main() -> Result<()> {
         sound::IS_SOUND_DISABLED.store(true, std::sync::atomic::Ordering::Relaxed);
         println!("Sound system globally disabled via --quiet.");
     }
-
 
     let initial_channels: Vec<String> = if cli.channels.is_empty() {
         CONFIG.default_channels.iter().cloned().collect()
@@ -259,7 +248,6 @@ async fn main() -> Result<()> {
     let channel_titles    = Arc::new(Mutex::new(HashMap::<String, String>::new()));
     let reconnect_times   = Arc::new(Mutex::new(Vec::<String>::new())); // <-- NEW: Store reconnect times
     let user_ids = Arc::new(Mutex::new(HashMap::<String, String>::new()));
-
 
     let (init_sound, init_notify): (HashMap<String, Urgency>, HashMap<String, Urgency>) = if cli.server {
         // Server mode: Nothing on
@@ -296,10 +284,6 @@ async fn main() -> Result<()> {
     };
     let msg_logging_channels = Arc::new(Mutex::new(initial_msg_logging));
 
-
-
-
-
     // --- Join Initial Channels ---
     for channel in &initial_channels {
         client.join(channel.clone())?;
@@ -315,170 +299,170 @@ async fn main() -> Result<()> {
     let reconnect_times_for_tokio       = Arc::clone(&reconnect_times);
     let user_ids_for_tokio = Arc::clone(&user_ids);
 
-
     let join_handle = tokio::spawn(async move {
-        tokio::select! {
-            _ = async {
-                while let Some(message) = incoming_messages.recv().await {
-                    let time_str = Local::now().format("%H:%M:%S").to_string();
-                    match message {
-                        ServerMessage::Privmsg(msg) => {
-                            handle_privmsg(
-                                &time_str,
-                                msg,
-                                &logs_for_tokio,
-                                &sound_channels_for_tokio,
-                                &notification_channels_for_tokio, // This is now a HashMap
-                                &msg_logging_for_tokio,
-                                &user_ids_for_tokio,
-                            );
-                        }
-
-                        ServerMessage::Join(msg) =>{
-                            handle_join_or_part("JOIN", &time_str, &msg.channel_login, &msg.user_login, &logs_for_tokio, &join_logs_for_tokio);
-                        }
-
-                        ServerMessage::Part(msg) => {
-                            handle_join_or_part("PART", &time_str, &msg.channel_login, &msg.user_login, &logs_for_tokio, &join_logs_for_tokio);
-                        }
-
-                        ServerMessage::Ping(_msg) => {
-                            print!("{} PING      \r", time_str); // Padding to overwrite leftover text
-                            io::stdout().flush().unwrap();
-                        }
-                        ServerMessage::Pong(_msg) => {
-                            print!("{} PONG      \r", time_str); // Same here
-                            io::stdout().flush().unwrap();
-                        }
-
-                        // --- NEW: Handle Reconnect ---
-                        ServerMessage::Reconnect(_msg) => {
-                            let reconnect_msg = format!("{} [RECONNECT] Server requested reconnect. Potential message loss.", time_str);
-                            println!("\n{}\n", reconnect_msg.red().bold());
-
-                            // 1. Store the time
-                            reconnect_times_for_tokio.lock().unwrap().push(time_str.clone());
-
-                            // 2. Log to all active channels
-                            let mut logs = logs_for_tokio.lock().unwrap();
-                            for channel_logs in logs.values_mut() {
-                                channel_logs.push(format!("{}\n", reconnect_msg));
+            tokio::select! {
+                _ = async {
+                    while let Some(message) = incoming_messages.recv().await {
+                        let time_str = Local::now().format("%H:%M:%S").to_string();
+                        match message {
+                            ServerMessage::Privmsg(msg) => {
+                                handle_privmsg(
+                                    &time_str,
+                                    msg,
+                                    &logs_for_tokio,
+                                    &sound_channels_for_tokio,
+                                    &notification_channels_for_tokio, // This is now a HashMap
+                                    &msg_logging_for_tokio,
+                                    &user_ids_for_tokio,
+                                );
                             }
 
-                            // 3. Send notification (if not in server mode)
-                            send_desktop_notification(
-                                "Twitch Client Reconnecting",
-                                "The server requested a reconnect. Message logging might be briefly interrupted.",
-                                Some(15000),
-                                Urgency::Normal
-                            );
+                            ServerMessage::Join(msg) =>{
+                                handle_join_or_part("JOIN", &time_str, &msg.channel_login, &msg.user_login, &logs_for_tokio, &join_logs_for_tokio);
+                            }
 
-                            // 4. Reprint prompt
-                            print!(">> ");
-                            io::stdout().flush().unwrap();
-                        }
+                            ServerMessage::Part(msg) => {
+                                handle_join_or_part("PART", &time_str, &msg.channel_login, &msg.user_login, &logs_for_tokio, &join_logs_for_tokio);
+                            }
 
-                        ServerMessage::RoomState(_msg) =>{println!("ROOMSTATE: {}",_msg.channel_login)}
+                            ServerMessage::Ping(_msg) => {
+                                print!("{} PING      \r", time_str); // Padding to overwrite leftover text
+                                io::stdout().flush().unwrap();
+                            }
+                            ServerMessage::Pong(_msg) => {
+                                print!("{} PONG      \r", time_str); // Same here
+                                io::stdout().flush().unwrap();
+                            }
 
-                        ServerMessage::Notice(msg) => {
-                            println!("{}[{}][NOTICE] {}", time_str.dimmed(), msg.channel_login.unwrap_or("unknown".to_string()),msg.message_text);
-                        }
+                            // --- NEW: Handle Reconnect ---
+                            ServerMessage::Reconnect(_msg) => {
+                                let reconnect_msg = format!("{} [RECONNECT] Server requested reconnect. Potential message loss.", time_str);
+                                println!("\n{}\n", reconnect_msg.red().bold());
 
-                        ServerMessage::ClearChat(msg) => {
-                            match &msg.action {
-                                // --- HANDLE BAN ---
-                                ClearChatAction::UserBanned { user_login, user_id, .. } => {
-                                    // 1. Store the ID in the global map
-                                    // We lock the map and insert the ID immediately
-                                    if let Ok(mut ids) = user_ids_for_tokio.lock() {
-                                        ids.insert(user_login.clone(), user_id.clone());
-                                    }
+                                // 1. Store the time
+                                reconnect_times_for_tokio.lock().unwrap().push(time_str.clone());
 
-                                    // 2. Format content to include the ID for the log
-                                    let content = format!("{} (ID: {})", user_login, user_id);
-
-                                    handle_moderation_event(
-                                        &time_str,
-                                        "USER_BANNED",
-                                        &msg.channel_login,
-                                        &content, // Pass the formatted string with ID
-                                        owo_colors::Style::new().red().blink(),
-                                                            &logs_for_tokio,
-                                                            &msg_logging_for_tokio,
-                                                            Urgency::Normal
-                                    );
+                                // 2. Log to all active channels
+                                let mut logs = logs_for_tokio.lock().unwrap();
+                                for channel_logs in logs.values_mut() {
+                                    channel_logs.push(format!("{}\n", reconnect_msg));
                                 }
 
-                                // --- HANDLE TIMEOUT (Optional: You can do the same here if you want) ---
-                                ClearChatAction::UserTimedOut { user_login, user_id, timeout_length, .. } => {
-                                    // Optional: Store ID for timeouts too
-                                    if let Ok(mut ids) = user_ids_for_tokio.lock() {
-                                        ids.insert(user_login.clone(), user_id.clone());
+                                // 3. Send notification (if not in server mode)
+                                send_desktop_notification(
+                                    "Twitch Client Reconnecting",
+                                    "The server requested a reconnect. Message logging might be briefly interrupted.",
+                                    Some(15000),
+                                    Urgency::Normal
+                                );
+
+                                // 4. Reprint prompt
+                                print!(">> ");
+                                io::stdout().flush().unwrap();
+                            }
+
+                            ServerMessage::RoomState(_msg) =>{println!("ROOMSTATE: {}",_msg.channel_login)}
+
+                            ServerMessage::Notice(msg) => {
+                                println!("{}[{}][NOTICE] {}", time_str.dimmed(), msg.channel_login.unwrap_or("unknown".to_string()),msg.message_text);
+                            }
+
+                            ServerMessage::ClearChat(msg) => {
+                                match &msg.action {
+                                    // --- HANDLE BAN ---
+                                    ClearChatAction::UserBanned { user_login, user_id, .. } => {
+                                        // 1. Store the ID in the global map
+                                        // We lock the map and insert the ID immediately
+                                        if let Ok(mut ids) = user_ids_for_tokio.lock() {
+                                            ids.insert(user_login.clone(), user_id.clone());
+                                        }
+
+                                        // 2. Format content to include the ID for the log
+                                        let content = format!("{} (ID: {})", user_login, user_id);
+
+                                        handle_moderation_event(
+                                            &time_str,
+                                            "USER_BANNED",
+                                            &msg.channel_login,
+                                            &content, // Pass the formatted string with ID
+                                            owo_colors::Style::new().red().blink(),
+                                            &logs_for_tokio,
+                                            &msg_logging_for_tokio,
+                                            Urgency::Normal
+                                        );
                                     }
 
-                                    let content = format!(
-                                        "{} (ID: {}) ({}s timeout)",
-                                                          user_login,
-                                                          user_id,
-                                                          timeout_length.as_secs()
-                                    );
+                                    // --- HANDLE TIMEOUT (Optional: You can do the same here if you want) ---
+                                    ClearChatAction::UserTimedOut { user_login, user_id, timeout_length, .. } => {
+                                        // Optional: Store ID for timeouts too
+                                        if let Ok(mut ids) = user_ids_for_tokio.lock() {
+                                            ids.insert(user_login.clone(), user_id.clone());
+                                        }
 
-                                    handle_moderation_event(
-                                        &time_str,
-                                        "TIMEOUT",
-                                        &msg.channel_login,
-                                        &content,
-                                        owo_colors::Style::new().red().blink(),
-                                                            &logs_for_tokio,
-                                                            &msg_logging_for_tokio,
-                                                            Urgency::Low
-                                    );
-                                }
+                                        let content = format!(
+                                            "{} (ID: {}) ({}s timeout)",
+                                            user_login,
+                                            user_id,
+                                            timeout_length.as_secs()
+                                        );
 
-                                // --- HANDLE CHAT CLEAR ---
-                                ClearChatAction::ChatCleared => {
-                                    handle_moderation_event(
-                                        &time_str,
-                                        "CHAT_CLEARED",
-                                        &msg.channel_login,
-                                        "The chat was cleared by a moderator.",
-                                        owo_colors::Style::new().dimmed(),
-                                                            &logs_for_tokio,
-                                                            &msg_logging_for_tokio,
-                                                            Urgency::Normal
-                                    );
+                                        handle_moderation_event(
+                                            &time_str,
+                                            "TIMEOUT",
+                                            &msg.channel_login,
+                                            &content,
+                                            owo_colors::Style::new().red().blink(),
+                                            &logs_for_tokio,
+                                            &msg_logging_for_tokio,
+                                            Urgency::Low
+                                        );
+                                    }
+
+                                    // --- HANDLE CHAT CLEAR ---
+                                    ClearChatAction::ChatCleared => {
+                                        handle_moderation_event(
+                                            &time_str,
+                                            "CHAT_CLEARED",
+                                            &msg.channel_login,
+                                            "The chat was cleared by a moderator.",
+                                            owo_colors::Style::new().dimmed(),
+                                            &logs_for_tokio,
+                                            &msg_logging_for_tokio,
+                                            Urgency::Normal
+                                        );
+                                    }
                                 }
                             }
-                        }
-                        ServerMessage::ClearMsg(msg) => {
-                            handle_moderation_event(
-                                &time_str,
-                                "CLEARMSG",
-                                &msg.channel_login,
-                                &msg.message_text,
-                                owo_colors::Style::new().bright_black().blink(),
-                                                    &logs_for_tokio,
-                                &msg_logging_for_tokio,
-                                Urgency::Low
-                            );
-                        }
-                        ServerMessage::UserNotice(msg) => {
-                            handle_user_notice(
-                                &time_str,
-                                &msg,
-                                &logs_for_tokio,
-                                &user_ids_for_tokio // <--- Pass here
-                            );
-                        }
+                            ServerMessage::ClearMsg(msg) => {
+                                handle_moderation_event(
+                                    &time_str,
+                                    "CLEARMSG",
+                                    &msg.channel_login,
+                                    &msg.message_text,
+                                    owo_colors::Style::new().bright_black().blink(),
+                                    &logs_for_tokio,
+                                    &msg_logging_for_tokio,
+                                    Urgency::Low
+                                );
+                            }
+                            ServerMessage::UserNotice(msg) => {
+                                handle_user_notice(
+                                    &time_str,
+                                    &msg,
+                                    &logs_for_tokio,
+                                    &msg_logging_for_tokio,
+                                    &user_ids_for_tokio // <--- Pass here
+                                );
+                            }
 
-                        _ => handle_default(&time_str, &message, &logs_for_tokio),
+                            _ => handle_default(&time_str, &message, &logs_for_tokio),
+                        }
                     }
+                } => {},
+                _ = exit_rx => {
+                    println!("Message loop received exit signal.");
                 }
-            } => {},
-            _ = exit_rx => {
-                println!("Message loop received exit signal.");
             }
-        }
     });
 
     // --- Autosave Task ---
@@ -489,64 +473,62 @@ async fn main() -> Result<()> {
     let user_ids_for_autosave = Arc::clone(&user_ids);
 
     tokio::spawn(async move {
-        // First, we calculate the duration until the next full hour.
-        let now = Utc::now().with_timezone(&Berlin);
-        let next_hour = (now + chrono::Duration::hours(1))
-        .with_minute(0).unwrap()
-        .with_second(0).unwrap()
-        .with_nanosecond(0).unwrap();
+            // First, we calculate the duration until the next full hour.
+            let now = Utc::now().with_timezone(&Berlin);
+            let next_hour = (now + chrono::Duration::hours(1))
+            .with_minute(0).unwrap()
+            .with_second(0).unwrap()
+            .with_nanosecond(0).unwrap();
 
-        let duration_to_wait = (next_hour - now).to_std().unwrap_or_else(|_| {
-            // Fallback in the unlikely event of a negative duration
-            std::time::Duration::from_secs(3600)
-        });
-
-        println!(
-            "{}",
-            format!(
-                "[AUTOSAVE] Next save scheduled for {}.",
-                next_hour.format("%H:%M:%S")
-            ).cyan()
-        );
-
-        // Wait until the top of the hour.
-        tokio::time::sleep(duration_to_wait).await;
-
-        // Now, create an interval that ticks every hour.
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
-        loop {
-            // The first tick completes immediately after the initial sleep.
-            interval.tick().await;
-
-            // Use \n to ensure the message appears on a new line, separate from user input.
-            println!(
-                "\n{}",
-                "[AUTOSAVE] Saving logs for all channels...".cyan()
-            );
-
-            // Call the existing save function for all channels.
-            save_logs(
-                "ALL",
-                &logs_for_autosave,
-                &join_logs_for_autosave,
-                &titles_for_autosave,
-                &reconnect_times_for_autosave,
-                &user_ids_for_autosave, // <--- Pass here
-                None,
-            );
+            let duration_to_wait = (next_hour - now).to_std().unwrap_or_else(|_| {
+                    // Fallback in the unlikely event of a negative duration
+                    std::time::Duration::from_secs(3600)
+            });
 
             println!(
-                "{}\n>> ", // Reprint the prompt for a better user experience
-                "[AUTOSAVE] Save complete. Next save in one hour.".cyan()
+                "{}",
+                format!(
+                    "[AUTOSAVE] Next save scheduled for {}.",
+                    next_hour.format("%H:%M:%S")
+                ).cyan()
             );
-            // We need to flush stdout to make sure the prompt appears immediately.
-            io::stdout().flush().unwrap();
-        }
+
+            // Wait until the top of the hour.
+            tokio::time::sleep(duration_to_wait).await;
+
+            // Now, create an interval that ticks every hour.
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                // The first tick completes immediately after the initial sleep.
+                interval.tick().await;
+
+                // Use \n to ensure the message appears on a new line, separate from user input.
+                println!(
+                    "\n{}",
+                    "[AUTOSAVE] Saving logs for all channels...".cyan()
+                );
+
+                // Call the existing save function for all channels.
+                save_logs(
+                    "ALL",
+                    &logs_for_autosave,
+                    &join_logs_for_autosave,
+                    &titles_for_autosave,
+                    &reconnect_times_for_autosave,
+                    &user_ids_for_autosave, // <--- Pass here
+                    None,
+                );
+
+                println!(
+                    "{}\n>> ", // Reprint the prompt for a better user experience
+                    "[AUTOSAVE] Save complete. Next save in one hour.".cyan()
+                );
+                // We need to flush stdout to make sure the prompt appears immediately.
+                io::stdout().flush().unwrap();
+            }
     });
 
-
     // --- User Input Handling Thread ---
-
 
     let client_for_thread                = client.clone();
     let logs_for_thread                  = Arc::clone(&logs);
@@ -559,234 +541,230 @@ async fn main() -> Result<()> {
     let reconnect_times_for_thread       = Arc::clone(&reconnect_times);
     let user_ids_for_thread              = Arc::clone(&user_ids);
 
-
     //let vips: Vec<String> = CONFIG.vips.keys().cloned().collect();
     let vips: Vec<String> = CONFIG.vips.keys().cloned().collect();
 
-
-
     let handle = std::thread::spawn(move || -> Result<()> {
-        let commands = vec![
-            "JOIN".into(),
-                                    "PART".into(),
-                                    "SOUND".into(),
-                                    "SAVE".into(),
-                                    "NOTIFY".into(),
-                                    "MSGLOGGING".into(),
-                                    "EXIT".into(),
-                                    "RECONNECT".into(),
-                                    "PAUSES".into(),
-                                    "STATS".into(),
-                                    "TITLE".into()
-        ];
+            let commands = vec![
+                "JOIN".into(),
+                "PART".into(),
+                "SOUND".into(),
+                "SAVE".into(),
+                "NOTIFY".into(),
+                "MSGLOGGING".into(),
+                "EXIT".into(),
+                "RECONNECT".into(),
+                "PAUSES".into(),
+                "STATS".into(),
+                "TITLE".into()
+            ];
 
+            let urgencies = vec!["LOW".into(), "NORMAL".into(), "CRITICAL".into()];
 
-        let urgencies = vec!["LOW".into(), "NORMAL".into(), "CRITICAL".into()];
+            let completer = CommandCompleter {
+                commands: commands.clone(),
 
-        let completer = CommandCompleter {
-            commands: commands.clone(),
+                urgencies: urgencies.clone(),
+                joined_channels: Arc::clone(&channels_for_thread),
+                vips: vips.clone(),
+                log_channels: Arc::clone(&logs_for_thread),
+            };
 
-                                    urgencies: urgencies.clone(),
-                                    joined_channels: Arc::clone(&channels_for_thread),
-                                    vips: vips.clone(),
-                                    log_channels: Arc::clone(&logs_for_thread),
-        };
+            let mut rl = Editor::<CommandCompleter, DefaultHistory>::new()?;
+            rl.set_helper(Some(completer));
 
-        let mut rl = Editor::<CommandCompleter, DefaultHistory>::new()?;
-        rl.set_helper(Some(completer));
+            println!("Commands: JOIN, PART, SOUND, SAVE, TITLE, MSGLOGGING, EXIT");
 
-        println!("Commands: JOIN, PART, SOUND, SAVE, TITLE, MSGLOGGING, EXIT");
+            loop {
+                match rl.readline(">> ") {
+                    Ok(input) => {
+                        let _ = rl.add_history_entry(input.as_str());
+                        let parts: Vec<&str> = input.trim().split_whitespace().collect();
+                        if parts.is_empty() {
+                            continue;
+                        }
 
-        loop {
-            match rl.readline(">> ") {
-                Ok(input) => {
-                    let _ = rl.add_history_entry(input.as_str());
-                    let parts: Vec<&str> = input.trim().split_whitespace().collect();
-                    if parts.is_empty() {
-                        continue;
-                    }
+                        let cmd = parts[0].to_uppercase();
+                        let arg = parts.get(1).map(|s| s.to_string());
 
-                    let cmd = parts[0].to_uppercase();
-                    let arg = parts.get(1).map(|s| s.to_string());
+                        match cmd.as_str() {
+                            "JOIN" => {
+                                if let Some(channel) = arg {
+                                    let _ = client_for_thread.join(channel.clone());
+                                    channels_for_thread.lock().unwrap().push(channel.clone());
+                                    // Add this line to enable message logging by default for the new channel
+                                    msg_logging_for_thread.lock().unwrap().insert(channel.clone());
+                                    get_or_assign_channel_color(&channel);
+                                    println!("Joined {}", channel.green());
+                                }
+                            },
+                            "PART" => {
+                                if let Some(channel) = arg {
+                                    let _ = client_for_thread.part(channel.clone());
+                                    channels_for_thread.lock().unwrap().retain(|c| c != &channel);
+                                    println!("Parted from {}", channel.red());
+                                }
+                            },
+                            "SOUND" => {
+                                if sound::IS_SOUND_DISABLED.load(std::sync::atomic::Ordering::Relaxed) {
+                                    println!("{}", "⚠️ Sound is globally disabled (--quiet). Restart to enable.".red());
+                                    continue;
+                                }
 
-                    match cmd.as_str() {
-                        "JOIN" => {
-                            if let Some(channel) = arg {
-                                let _ = client_for_thread.join(channel.clone());
-                                channels_for_thread.lock().unwrap().push(channel.clone());
-                                // Add this line to enable message logging by default for the new channel
-                                msg_logging_for_thread.lock().unwrap().insert(channel.clone());
-                                get_or_assign_channel_color(&channel);
-                                println!("Joined {}", channel.green());
-                            }
-                        },
-                        "PART" => {
-                            if let Some(channel) = arg {
-                                let _ = client_for_thread.part(channel.clone());
-                                channels_for_thread.lock().unwrap().retain(|c| c != &channel);
-                                println!("Parted from {}", channel.red());
-                            }
-                        },
-                        "SOUND" => {
-                            if sound::IS_SOUND_DISABLED.load(std::sync::atomic::Ordering::Relaxed) {
-                                println!("{}", "⚠️ Sound is globally disabled (--quiet). Restart to enable.".red());
-                                continue;
-                            }
+                                if let Some(channel) = arg {
+                                    let mut sound_chans = sound_channels_for_thread.lock().unwrap();
 
-                            if let Some(channel) = arg {
-                                let mut sound_chans = sound_channels_for_thread.lock().unwrap();
+                                    if sound_chans.contains_key(&channel) {
+                                        sound_chans.remove(&channel);
+                                        println!("Sound OFF for {}", channel.yellow());
+                                    } else {
+                                        // LOGIC: Check explicit argument OR fallback to VIP/Low
+                                        let specific_urgency = if parts.len() > 2 {
+                                            match parts[2].to_uppercase().as_str() {
+                                                "LOW" => Some(Urgency::Low),
+                                                "NORMAL" => Some(Urgency::Normal),
+                                                "CRITICAL" => Some(Urgency::Critical),
+                                                _ => None,
+                                            }
+                                        } else { None };
 
-                                if sound_chans.contains_key(&channel) {
-                                    sound_chans.remove(&channel);
-                                    println!("Sound OFF for {}", channel.yellow());
-                                } else {
-                                    // LOGIC: Check explicit argument OR fallback to VIP/Low
+                                        let urgency = specific_urgency.unwrap_or_else(|| {
+                                                if CONFIG.vips.contains_key(&channel) { Urgency::Normal } else { Urgency::Low }
+                                        });
+
+                                        sound_chans.insert(channel.clone(), urgency); // Insert with urgency
+                                        notification_channels_for_thread.lock().unwrap().remove(&channel);
+                                        println!("Sound ON for {} (Level: {:?})", channel.green(), urgency);
+                                    }
+                                }
+                            },
+                            "NOTIFY" => {
+                                // Syntax: NOTIFY <channel> [urgency]
+                                if let Some(channel) = arg {
+                                    let mut notify_chans = notification_channels_for_thread.lock().unwrap();
+
+                                    // Check for optional 2nd argument (urgency)
                                     let specific_urgency = if parts.len() > 2 {
                                         match parts[2].to_uppercase().as_str() {
                                             "LOW" => Some(Urgency::Low),
-                                    "NORMAL" => Some(Urgency::Normal),
-                                    "CRITICAL" => Some(Urgency::Critical),
-                                    _ => None,
+                                            "NORMAL" => Some(Urgency::Normal),
+                                            "CRITICAL" => Some(Urgency::Critical),
+                                            _ => {
+                                                println!("Unknown urgency '{}'. Using default.", parts[2]);
+                                                None
+                                            }
                                         }
-                                    } else { None };
+                                    } else {
+                                        None
+                                    };
 
-                                    let urgency = specific_urgency.unwrap_or_else(|| {
-                                        if CONFIG.vips.contains_key(&channel) { Urgency::Normal } else { Urgency::Low }
+                                    // Calculate the final urgency to set
+                                    let target_urgency = specific_urgency.unwrap_or_else(|| {
+                                            // Default rule: VIP=Normal, others=Low
+                                            if CONFIG.vips.contains_key(&channel) { Urgency::Normal } else { Urgency::Low }
                                     });
 
-                                    sound_chans.insert(channel.clone(), urgency); // Insert with urgency
-                                    notification_channels_for_thread.lock().unwrap().remove(&channel);
-                                    println!("Sound ON for {} (Level: {:?})", channel.green(), urgency);
-                                }
-                            }
-                        },
-                        "NOTIFY" => {
-                            // Syntax: NOTIFY <channel> [urgency]
-                            if let Some(channel) = arg {
-                                let mut notify_chans = notification_channels_for_thread.lock().unwrap();
+                                    if notify_chans.contains_key(&channel) && parts.len() == 2 {
+                                        // If toggling OFF (no urgency arg provided and already exists)
+                                        notify_chans.remove(&channel);
+                                        println!("Notifications OFF for {}", channel.yellow());
+                                    } else {
+                                        // Turning ON or Updating Urgency
+                                        notify_chans.insert(channel.clone(), target_urgency);
 
-                                // Check for optional 2nd argument (urgency)
-                                let specific_urgency = if parts.len() > 2 {
-                                    match parts[2].to_uppercase().as_str() {
-                                        "LOW" => Some(Urgency::Low),
-                                    "NORMAL" => Some(Urgency::Normal),
-                                    "CRITICAL" => Some(Urgency::Critical),
-                                    _ => {
-                                        println!("Unknown urgency '{}'. Using default.", parts[2]);
-                                        None
+                                        // Ensure sound is off
+                                        sound_channels_for_thread.lock().unwrap().remove(&channel);
+
+                                        println!("Notifications ON for {} (Level: {:?}) (Sound is OFF)", channel.cyan(), target_urgency);
                                     }
+                                }
+                            },
+                            // New command handler
+                            "MSGLOGGING" => {
+                                if let Some(channel) = arg {
+                                    let mut logging_chans = msg_logging_for_thread.lock().unwrap();
+                                    if logging_chans.contains(&channel) {
+                                        logging_chans.remove(&channel);
+                                        println!("Message console logging OFF for {}", channel.yellow());
+                                    } else {
+                                        logging_chans.insert(channel.clone());
+                                        println!("Message console logging ON for {}", channel.green());
                                     }
                                 } else {
-                                    None
-                                };
-
-                                // Calculate the final urgency to set
-                                let target_urgency = specific_urgency.unwrap_or_else(|| {
-                                    // Default rule: VIP=Normal, others=Low
-                                    if CONFIG.vips.contains_key(&channel) { Urgency::Normal } else { Urgency::Low }
-                                });
-
-                                if notify_chans.contains_key(&channel) && parts.len() == 2 {
-                                    // If toggling OFF (no urgency arg provided and already exists)
-                                    notify_chans.remove(&channel);
-                                    println!("Notifications OFF for {}", channel.yellow());
-                                } else {
-                                    // Turning ON or Updating Urgency
-                                    notify_chans.insert(channel.clone(), target_urgency);
-
-                                    // Ensure sound is off
-                                    sound_channels_for_thread.lock().unwrap().remove(&channel);
-
-                                    println!("Notifications ON for {} (Level: {:?}) (Sound is OFF)", channel.cyan(), target_urgency);
+                                    println!("Usage: MSGLOGGING <channel>");
                                 }
-                            }
-                        },
-                        // New command handler
-                        "MSGLOGGING" => {
-                            if let Some(channel) = arg {
-                                let mut logging_chans = msg_logging_for_thread.lock().unwrap();
-                                if logging_chans.contains(&channel) {
-                                    logging_chans.remove(&channel);
-                                    println!("Message console logging OFF for {}", channel.yellow());
-                                } else {
-                                    logging_chans.insert(channel.clone());
-                                    println!("Message console logging ON for {}", channel.green());
+                            },
+                            "TITLE" => {
+                                if parts.len() < 3 {
+                                    println!("Usage: TITLE <channel> <stream title...>");
+                                    continue;
                                 }
-                            } else {
-                                println!("Usage: MSGLOGGING <channel>");
-                            }
-                        },
-                        "TITLE" => {
-                            if parts.len() < 3 {
-                                println!("Usage: TITLE <channel> <stream title...>");
-                                continue;
-                            }
-                            let channel_to_title = parts[1].to_string();
-                            let stream_title = parts[2..].join(" ");
+                                let channel_to_title = parts[1].to_string();
+                                let stream_title = parts[2..].join(" ");
 
-                            // Optional: Check if we are even in that channel
-                            let joined_channels = channels_for_thread.lock().unwrap();
-                            if !joined_channels.iter().any(|c| c.eq_ignore_ascii_case(&channel_to_title)) {
-                                println!("⚠️ You are not in channel '{}'. Title not set.", channel_to_title.red());
-                                continue;
-                            }
+                                // Optional: Check if we are even in that channel
+                                let joined_channels = channels_for_thread.lock().unwrap();
+                                if !joined_channels.iter().any(|c| c.eq_ignore_ascii_case(&channel_to_title)) {
+                                    println!("⚠️ You are not in channel '{}'. Title not set.", channel_to_title.red());
+                                    continue;
+                                }
 
-                            let mut titles = titles_for_thread.lock().unwrap();
-                            titles.insert(channel_to_title.clone(), stream_title.clone());
-                            println!(
-                                "Set title for '{}' to: {}",
-                                channel_to_title.cyan(),
-                                     stream_title.green()
-                            );
-                        },
-                        "SAVE" => {
-                            if parts.len() >= 2 {
-                                let target = parts[1];
-                                let custom_name = if parts.len() > 2 {
-                                    Some(parts[2..].join("_"))
-                                } else {
-                                    None
-                                };
-                                save_logs(
-                                    target,
-                                    &logs_for_thread,
-                                    &join_logs_for_thread,
-                                    &titles_for_thread,
-                                    &reconnect_times_for_thread,
-                                    &user_ids_for_thread, // <--- Pass here
-                                    custom_name.as_deref()
+                                let mut titles = titles_for_thread.lock().unwrap();
+                                titles.insert(channel_to_title.clone(), stream_title.clone());
+                                println!(
+                                    "Set title for '{}' to: {}",
+                                    channel_to_title.cyan(),
+                                    stream_title.green()
                                 );
-                            } else {
-                                println!("Usage: SAVE <channel|ALL> [optional_custom_name]");
-                            }
-                        },
+                            },
+                            "SAVE" => {
+                                if parts.len() >= 2 {
+                                    let target = parts[1];
+                                    let custom_name = if parts.len() > 2 {
+                                        Some(parts[2..].join("_"))
+                                    } else {
+                                        None
+                                    };
+                                    save_logs(
+                                        target,
+                                        &logs_for_thread,
+                                        &join_logs_for_thread,
+                                        &titles_for_thread,
+                                        &reconnect_times_for_thread,
+                                        &user_ids_for_thread, // <--- Pass here
+                                        custom_name.as_deref()
+                                    );
+                                } else {
+                                    println!("Usage: SAVE <channel|ALL> [optional_custom_name]");
+                                }
+                            },
 
-                        "EXIT" => {
-                            println!("Shutting down...");
-                            let joined_channels = channels_for_thread.lock().unwrap().clone();
-                            for channel in joined_channels {
-                                let _ = client_for_thread.part(channel.clone());
-                                println!("Left channel: {}", channel);
-                            }
-                            let _ = exit_tx.send(()); // notify the async task
-                            break;
-                        },
-                        _ => println!("{}: '{}'", "Unknown command".red(), input.trim()),
+                            "EXIT" => {
+                                println!("Shutting down...");
+                                let joined_channels = channels_for_thread.lock().unwrap().clone();
+                                for channel in joined_channels {
+                                    let _ = client_for_thread.part(channel.clone());
+                                    println!("Left channel: {}", channel);
+                                }
+                                let _ = exit_tx.send(()); // notify the async task
+                                break;
+                            },
+                            _ => println!("{}: '{}'", "Unknown command".red(), input.trim()),
+                        }
+                    }
+                    Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => {
+                        println!("Exiting...");
+                        break;
+                    }
+                    Err(err) => {
+                        println!("Input Error: {:?}", err);
+                        break;
                     }
                 }
-                Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => {
-                    println!("Exiting...");
-                    break;
-                }
-                Err(err) => {
-                    println!("Input Error: {:?}", err);
-                    break;
-                }
             }
-        }
-        //let _ = exit_tx.send(()); // This signals the async task to stop
+            //let _ = exit_tx.send(()); // This signals the async task to stop
 
-        Ok(())
+            Ok(())
     });
     //let handle_result = handle.join().expect("Input thread panicked");
     if let Err(e) = join_handle.await {
@@ -824,13 +802,13 @@ fn handle_default(
 
     if kind == "OTHER" {
         println!("{} [SYSTEM: OTHER] {:?}", time.dimmed(), message
-        .source()
-        .tags
-        .0
-        .get("msg-id")
-        //.and_then(|v| v.as_deref())
-        .map(|v| v.as_str())
-        .unwrap_or("unknown"));
+            .source()
+            .tags
+            .0
+            .get("msg-id")
+            //.and_then(|v| v.as_deref())
+            .map(|v| v.as_str())
+            .unwrap_or("unknown"));
     } else {
         println!("{} ...", time.dimmed())
     }
@@ -914,17 +892,16 @@ fn handle_privmsg(
         println!(
             "{} [{}] {}{}: {}",
             time_str.dimmed(),
-                 channel_display,
-                 user_styled.bold(),
-                 badge_info_for_console.replace("moderator/","mod/").replace("subscriber/","sub/").replace("premium/","prime/"),
-                 msg.message_text
+            channel_display,
+            user_styled.bold(),
+            badge_info_for_console.replace("moderator/","mod/").replace("subscriber/","sub/").replace("premium/","prime/"),
+            msg.message_text
         );
     }
     //notify
 
     let summary = format!("#{}", msg.channel_login);
     let body = format!("{}: {}", msg.sender.name, msg.message_text);
-
 
     let calculate_timeout = || -> Option<u32> {
         const BASE_TIMEOUT_MS: u32 = 3000; // 3 seconds base time
@@ -944,7 +921,6 @@ fn handle_privmsg(
         Some(total_timeout)
     };
 
-
     if let Some(urgency) = sound_channels.lock().unwrap().get(&msg.channel_login) {
         // Use the urgency stored in the map
         send_desktop_notification(&summary, &body, calculate_timeout(), *urgency);
@@ -963,7 +939,8 @@ fn handle_user_notice(
     time: &str,
     msg: &twitch_irc::message::UserNoticeMessage,
     logs: &Arc<Mutex<HashMap<String, Vec<String>>>>,
-    user_ids: &Arc<Mutex<HashMap<String, String>>>,
+    msg_logging_channels: &Arc<Mutex<HashSet<String>>>,
+    _user_ids: &Arc<Mutex<HashMap<String, String>>>,
 ) {
     use owo_colors::OwoColorize;
     use twitch_irc::message::UserNoticeEvent;
@@ -998,15 +975,17 @@ fn handle_user_notice(
         user_msg
     );
 
-    println!(
-        "{} [{}][{}] {}: {}\n→ {}\n",
-        time.dimmed(),
-             channel,
-             user,
-             event_type.blue(),
-             sys_msg.yellow(),
-             user_msg
-    );
+    if msg_logging_channels.lock().unwrap().contains(&msg.channel_login) {
+        println!(
+            "{} [{}][{}] {}: {}\n→ {}\n",
+            time.dimmed(),
+            channel,
+            user,
+            event_type.blue(),
+            sys_msg.yellow(),
+            user_msg
+        );
+    }
 
     if let Ok(mut logs) = logs.lock() {
         logs.entry(channel.clone())
@@ -1014,7 +993,6 @@ fn handle_user_notice(
         .push(line);
     }
 }
-
 
 fn handle_moderation_event(
     time_str: &str,
@@ -1044,9 +1022,9 @@ fn handle_moderation_event(
 }
 
 /*struct JoinEvent {
-    channel: String,
-    user: String,
-    event: String, // "J" or "P"
+channel: String,
+user: String,
+event: String, // "J" or "P"
 }*/
 
 fn handle_join_or_part(
@@ -1077,7 +1055,7 @@ fn handle_join_or_part(
         .or_default()
         .push(chat_log_msg);
 
-        send_desktop_notification(channel, &format!("{} {}ed", username, event_type), Some(7000), Urgency::Normal);
+        send_desktop_notification(channel, &format!("{} {}ed", username, event_type.to_uppercase()), Some(7000), Urgency::Normal);
 
         if event_type == "JOIN" && username != channel {
             play_sound();
@@ -1106,13 +1084,13 @@ fn save_logs(
             eprintln!(
                 "⚠️ Failed to create log directory '{}': {}. Defaulting to /tmp.",
                 log_dir_path.display(),
-                      e
+                e
             );
             log_dir_path = PathBuf::from("/tmp");
         }
     }
 
-    // --- PART 1: SAVE CHAT MESSAGES (Already had BOM, kept for consistency) ---
+    // --- PART 1: SAVE CHAT MESSAGES ---
     let targets: Vec<String> = if target.eq_ignore_ascii_case("ALL") {
         logs_locked.keys().cloned().collect()
     } else {
@@ -1138,10 +1116,10 @@ fn save_logs(
             }
 
             let time_part = messages
-            .iter()
-            .find(|line| line.contains('<') && line.contains('>'))
-            .map(|first_line| first_line[0..8].replace(':', "-"))
-            .unwrap_or_else(|| Local::now().format("%H-%M-%S").to_string());
+                .iter()
+                .find(|line| line.contains('<') && line.contains('>'))
+                .map(|first_line| first_line[0..8].replace(':', "-"))
+                .unwrap_or_else(|| Local::now().format("%H-%M-%S").to_string());
 
             let timestamp_for_save = format!("{}_{}", *STARTUP_DATE, time_part);
 
@@ -1154,7 +1132,6 @@ fn save_logs(
 
             let file_path = log_dir_path.join(&file_name);
 
-            // ... [Stats calculation logic remains the same] ...
             let mut msg_count = 0;
             let mut unique_chatters = HashSet::new();
             let mut mod_events = 0;
@@ -1165,49 +1142,197 @@ fn save_logs(
             let mut user_message_stats: HashMap<String, usize> = HashMap::new();
             let mut banned_users_set = HashSet::new();
             let mut timeout_users_set = HashSet::new();
-            let mut seen_vips_set = HashSet::new();
+            let mut seen_vips: BTreeMap<String, BTreeSet<&'static str>> = BTreeMap::new();
 
             for line in messages {
                 let mut potentially_chat = false;
-                if line.contains("SUBORRESUB") || line.contains("SUBGIFT") || line.contains("SUBMYSTERYGIFT") || line.contains("ANONSUBMYSTERYGIFT") || line.contains("GIFTPAIDUPGRADE") || line.contains("ANONPAIDGIFTUPGRADE") || line.contains("PRIMEPAIDUPGRADE") || line.contains("COMMUNITYPAYFORWARD") || line.contains("[SUBSCRIPTION]") || line.contains("[RESUBSCRIPTION]") { sub_events += 1; potentially_chat = true; }
-                else if line.contains("USER_BANNED") { mod_events += 1; if let Some(start_bracket) = line.find("] ") { let content = &line[start_bracket + 2..]; if let Some(end_name) = content.find(' ') { banned_users_set.insert(content[..end_name].to_string()); } } }
-                else if line.contains("TIMEOUT") { mod_events += 1; if let Some(start_bracket) = line.find("] ") { let content = &line[start_bracket + 2..]; if let Some(end_name) = content.find(' ') { timeout_users_set.insert(content[..end_name].to_string()); } } }
-                else if line.contains("CLEARMSG") || line.contains("CHAT_CLEARED") { mod_events += 1; }
-                else if line.contains("RAID") && line.contains("raiders from") && line.contains("have joined") { raid_events += 1; }
-                else if line.contains("VIEWERMILESTONE") || line.contains("MILESTONE") { milestone_events += 1; potentially_chat = true; }
-                else if line.contains("ANNOUNCEMENT") || line.contains("SHAREDCHATNOTICE") { other_events += 1; potentially_chat = true; }
-                else if line.contains("[JOIN] ") || line.contains("[PART] ") {
-                    let name_part = if let Some(idx) = line.find("[JOIN] ") { Some(&line[idx + 7..]) } else if let Some(idx) = line.find("[PART] ") { Some(&line[idx + 7..]) } else { None };
-                    if let Some(name_str) = name_part { let name = name_str.trim(); if !name.is_empty() && !name.eq_ignore_ascii_case(&chan) { seen_vips_set.insert(name.to_string()); } }
-                } else { potentially_chat = true; }
 
-                if potentially_chat && line.matches(':').count() >= 2 && line.contains('<') && line.contains('>') {
-                    if let Some(start) = line.find('<') { if let Some(end) = line.find('>') { if end > start { let username = &line[start + 1..end]; msg_count += 1; unique_chatters.insert(username.to_string()); *user_message_stats.entry(username.to_string()).or_default() += 1; } } }
+                if line.contains("SUBORRESUB")
+                    || line.contains("SUBGIFT")
+                    || line.contains("SUBMYSTERYGIFT")
+                    || line.contains("ANONSUBMYSTERYGIFT")
+                    || line.contains("GIFTPAIDUPGRADE")
+                    || line.contains("ANONPAIDGIFTUPGRADE")
+                    || line.contains("PRIMEPAIDUPGRADE")
+                    || line.contains("COMMUNITYPAYFORWARD")
+                    || line.contains("[SUBSCRIPTION]")
+                    || line.contains("[RESUBSCRIPTION]")
+                {
+                    sub_events += 1;
+                    potentially_chat = true;
+                } else if line.contains("USER_BANNED") {
+                    mod_events += 1;
+                    if let Some(start_bracket) = line.find("] ") {
+                        let content = &line[start_bracket + 2..];
+                        if let Some(end_name) = content.find(' ') {
+                            banned_users_set.insert(content[..end_name].to_string());
+                        }
+                    }
+                } else if line.contains("TIMEOUT") {
+                    mod_events += 1;
+                    if let Some(start_bracket) = line.find("] ") {
+                        let content = &line[start_bracket + 2..];
+                        if let Some(end_name) = content.find(' ') {
+                            timeout_users_set.insert(content[..end_name].to_string());
+                        }
+                    }
+                } else if line.contains("CLEARMSG") || line.contains("CHAT_CLEARED") {
+                    mod_events += 1;
+                } else if line.contains("RAID") && line.contains("raiders from") && line.contains("have joined") {
+                    raid_events += 1;
+                } else if line.contains("VIEWERMILESTONE") || line.contains("MILESTONE") {
+                    milestone_events += 1;
+                    potentially_chat = true;
+                } else if line.contains("ANNOUNCEMENT") || line.contains("SHAREDCHATNOTICE") {
+                    other_events += 1;
+                    potentially_chat = true;
+                } else if line.contains("[JOIN] ") || line.contains("[PART] ") {
+                    let name_part = line
+                        .find("[JOIN] ")
+                        .or_else(|| line.find("[PART] "))
+                        .map(|idx| &line[idx + 7..]);
+                    if let Some(name_str) = name_part {
+                        let name = name_str.trim();
+                        if !name.is_empty() && !name.eq_ignore_ascii_case(&chan) {
+                            seen_vips
+                                .entry(name.to_lowercase())
+                                .or_default()
+                                .insert("join");
+                        }
+                    }
+                } else {
+                    potentially_chat = true;
+                }
+
+                if potentially_chat
+                    && line.matches(':').count() >= 2
+                    && line.contains('<')
+                    && line.contains('>')
+                {
+                    if let (Some(start), Some(end)) = (line.find('<'), line.find('>')) {
+                        if end > start {
+                            let username = &line[start + 1..end];
+                            msg_count += 1;
+                            unique_chatters.insert(username.to_string());
+                            *user_message_stats.entry(username.to_string()).or_default() += 1;
+
+                            if !username.eq_ignore_ascii_case(&chan) {
+                                let key = username.to_lowercase();
+                                let roles = seen_vips.entry(key.clone()).or_default();
+
+                                // 1. Local VIP config
+                                if CONFIG.vips.contains_key(username) || CONFIG.vips.contains_key(&key) {
+                                    roles.insert("custom");
+                                }
+
+                                // 2. Badges
+                                let badge_section = &line[end + 1..];
+                                let badge_line = badge_section.lines().next().unwrap_or("");
+                                if badge_line.contains("vip/")     { roles.insert("vip"); }
+                                if badge_line.contains("partner/") { roles.insert("partner"); }
+                                if badge_line.contains("mod/")     { roles.insert("mod"); }
+                                if badge_line.contains("founder/") { roles.insert("founder"); }
+
+                                if roles.is_empty() {
+                                    seen_vips.remove(&key);
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
             let mut sorted_stats: Vec<_> = user_message_stats.into_iter().collect();
             sorted_stats.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            let user_activity_summary = sorted_stats.iter().map(|(user, count)| format!("[{}:{}]", user, count)).collect::<Vec<_>>().join(" ");
-            let mut banned_list_sorted: Vec<_> = banned_users_set.into_iter().collect(); banned_list_sorted.sort();
-            let banned_display = if banned_list_sorted.is_empty() { "None".to_string() } else { banned_list_sorted.join(", ") };
-            let mut timeout_list_sorted: Vec<_> = timeout_users_set.into_iter().collect(); timeout_list_sorted.sort();
-            let timeout_display = if timeout_list_sorted.is_empty() { "None".to_string() } else { timeout_list_sorted.join(", ") };
-            let mut vips_sorted: Vec<_> = seen_vips_set.into_iter().collect(); vips_sorted.sort();
-            let vips_display = if vips_sorted.is_empty() { "None".to_string() } else { vips_sorted.join(", ") };
+            let user_activity_summary = sorted_stats
+                .iter()
+                .map(|(user, count)| format!("[{}:{}]", user, count))
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let mut banned_list_sorted: Vec<_> = banned_users_set.into_iter().collect();
+            banned_list_sorted.sort();
+            let banned_display = if banned_list_sorted.is_empty() {
+                "None".to_string()
+            } else {
+                banned_list_sorted.join(", ")
+            };
+
+            let mut timeout_list_sorted: Vec<_> = timeout_users_set.into_iter().collect();
+            timeout_list_sorted.sort();
+            let timeout_display = if timeout_list_sorted.is_empty() {
+                "None".to_string()
+            } else {
+                timeout_list_sorted.join(", ")
+            };
+
+            let vips_display = if seen_vips.is_empty() {
+                "None".to_string()
+            } else {
+                seen_vips
+                    .iter()
+                    .map(|(user, roles)| {
+						let display_name = if roles.contains("custom") {
+                user.to_uppercase()
+            } else {
+                user.clone()
+            };
+                        let role_list: Vec<&str> = roles.iter().copied().collect();
+                        format!("{} ({})", display_name, role_list.join(", "))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+
             let msg_counts: Vec<usize> = sorted_stats.iter().map(|(_, count)| *count).collect();
-            let avg_per_chatter = if !msg_counts.is_empty() { msg_counts.iter().sum::<usize>() as f64 / msg_counts.len() as f64 } else { 0.0 };
-            let median_line = if msg_counts.is_empty() { "Median value: N/A".to_string() } else {
-                let mut sorted_counts = msg_counts.clone(); sorted_counts.sort_unstable(); let len = sorted_counts.len();
-                if len % 2 == 1 { format!("Median value: {}", sorted_counts[len / 2]) } else { format!("Median value: {}, {}", sorted_counts[len / 2 - 1], sorted_counts[len / 2]) }
+            let avg_per_chatter = if !msg_counts.is_empty() {
+                msg_counts.iter().sum::<usize>() as f64 / msg_counts.len() as f64
+            } else {
+                0.0
+            };
+            let median_line = if msg_counts.is_empty() {
+                "Median value: N/A".to_string()
+            } else {
+                let mut sorted_counts = msg_counts.clone();
+                sorted_counts.sort_unstable();
+                let len = sorted_counts.len();
+                if len % 2 == 1 {
+                    format!("Median value: {}", sorted_counts[len / 2])
+                } else {
+                    format!(
+                        "Median value: {}, {}",
+                        sorted_counts[len / 2 - 1],
+                        sorted_counts[len / 2]
+                    )
+                }
             };
 
             let header = format!(
-                "--- Message/Event Log ---\n# {} {}\n({} messages from {} chatters, {:.1} messages per chatter)\n({} Banns, Deletions, and Timeouts)\n -> BANNED USERS: {}\n -> TIMED OUT USERS: {}\n({} Subs/Giftsubs)\n({} Raids)\n({} Milestones)\n({} Others)\n -> SEEN VIPS: {}\nChatter Activity (msg count): {}\n{}\n{}{}\n\n",
-                                 chan, file_name, msg_count, unique_chatters.len(), avg_per_chatter, mod_events, banned_display, timeout_display, sub_events, raid_events, milestone_events, other_events, vips_display, user_activity_summary, median_line, "", reconnect_warning
+                "--- Message/Event Log ---\n# {} {}\n({} messages from {} chatters, {:.1} messages per chatter)\n({} Banns, Deletions, and Timeouts)\n -> BANNED USERS: {}\n -> TIMED OUT USERS: {}\n({} Subs/Giftsubs)\n({} Raids)\n({} Milestones)\n({} Others)\n -> SEEN VIPS: {}\nChatter Activity (msg count): {}\n{}\n{}\n\n",
+                chan,
+                file_name,
+                msg_count,
+                unique_chatters.len(),
+                avg_per_chatter,
+                mod_events,
+                banned_display,
+                timeout_display,
+                sub_events,
+                raid_events,
+                milestone_events,
+                other_events,
+                vips_display,
+                user_activity_summary,
+                median_line,
+                reconnect_warning
             );
 
-            let numbered_messages = messages.iter().enumerate().map(|(i, line)| format!("{}. {}", i + 1, line)).collect::<Vec<_>>().join("\n");
+            let numbered_messages = messages
+                .iter()
+                .enumerate()
+                .map(|(i, line)| format!("{}. {}", i + 1, line))
+                .collect::<Vec<_>>()
+                .join("\n");
             let final_content = format!("{}{}", header, numbered_messages);
 
             // --- BOM ENFORCEMENT ---
@@ -1221,7 +1346,7 @@ fn save_logs(
         }
     }
 
-    // --- PART 2: SAVE GLOBAL JOIN/PART LOGS (UPDATED WITH BOM) ---
+    // --- PART 2: SAVE GLOBAL JOIN/PART LOGS ---
     if !join_logs_locked.is_empty() {
         let save_timestamp = Local::now().format("%d.%m.%Y %H:%M:%S").to_string();
         let filename = format!("JOIN_PART_LOG_{}.txt", *SESSION_TIMESTAMP);
@@ -1233,20 +1358,27 @@ fn save_logs(
             join_logs_locked.join("")
         );
 
-        // For append mode, we check if file exists. If not, write BOM first.
         let file_exists = join_file_path.exists();
-        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&join_file_path) {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&join_file_path)
+        {
             if !file_exists {
                 let _ = file.write_all(&[0xEF, 0xBB, 0xBF]);
             }
             if file.write_all(file_chunk.as_bytes()).is_ok() {
-                println!("Appended {} global events to {}", join_logs_locked.len(), join_file_path.display());
+                println!(
+                    "Appended {} global events to {}",
+                    join_logs_locked.len(),
+                    join_file_path.display()
+                );
                 join_logs_locked.clear();
             }
         }
     }
 
-    // --- PART 3: SAVE USER IDs (UPDATED WITH BOM) ---
+    // --- PART 3: SAVE USER IDs ---
     if !user_ids_locked.is_empty() {
         let filename = format!("USER_IDS_{}.txt", *STARTUP_DATE);
         let id_file_path = log_dir_path.join(filename);
@@ -1264,7 +1396,7 @@ fn save_logs(
         }
     }
 
-    // --- PART 4: SAVE BANS (UPDATED WITH BOM) ---
+    // --- PART 4: SAVE BANS ---
     let mut all_bans = Vec::new();
     for (_chan_name, lines) in logs_locked.iter() {
         for line in lines {

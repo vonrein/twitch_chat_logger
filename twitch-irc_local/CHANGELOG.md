@@ -4,6 +4,23 @@ Version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## v6.1.3
+
+- Bugfix: Parsing no longer fails for `submysterygift` messages sent by `minecraft` during gift-match events (#234).
+
+## v6.1.2
+
+- Bugfix: New connection rate limiting now also applies when transport initialization fails or times out (#231).
+
+## v6.1.1
+
+- Dev: Update `rustls-platform-verifier` to 0.7 (#228).
+
+## v6.1.0
+
+- Minor: Added support for announcements (`UserNoticeEvent::Announcement`) (#226).
+- Bugfix: Parsing no longer errors on announcement messages (#226).
+
 ## v6.0.0
 
 - Breaking: Fixed a erroneous implementation of the IRCv3 tags: This crate now no longer differentiates

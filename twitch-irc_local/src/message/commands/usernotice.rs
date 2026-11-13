@@ -42,12 +42,11 @@ pub struct UserNoticeMessage {
     /// Currently the only event that can a message is a `resub`, where this message text is the
     /// message the user shared with the streamer alongside the resub message.
     pub message_text: Option<String>,
-    /// A system message that is always present and represents a user-presentable message
+    /// A system message. If present, represents a user-presentable message
     /// of what this event is, for example "FuchsGewand subscribed with Twitch Prime.
     /// They've subscribed for 12 months, currently on a 9 month streak!".
     ///
-    /// This message is always present and always fully pre-formatted by Twitch
-    /// with this event's parameters.
+    /// This is an empty string for some message types such as announcements.
     pub system_message: String,
 
     /// this holds the event-specific data, e.g. for sub, resub, subgift, etc...
@@ -284,6 +283,12 @@ pub enum UserNoticeEvent {
         threshold: u64,
     },
 
+    /// A highlighted announcement created via /announcement.
+    Announcement {
+        /// If set, typically one of the values PRIMARY, BLUE, GREEN, ORANGE, PURPLE
+        color: Option<String>,
+    },
+
     // this is hidden so users don't match on it. Instead they should match on _
     // so their code still works the same when new variants are added here.
     #[doc(hidden)]
@@ -416,12 +421,8 @@ impl TryFrom<IRCMessage> for UserNoticeMessage {
             // this takes over all other cases of submysterygift.
             "submysterygift" => UserNoticeEvent::SubMysteryGift {
                 mass_gift_count: source.try_get_number("msg-param-mass-gift-count")?,
-                sender_total_gifts: if sender.login != "twitch" {
-                    Some(source.try_get_number("msg-param-sender-count")?)
-                } else {
-                    //  - this seems to be missing if sender the sender is twitch (user-id=12826) on subtembers
-                    source.try_get_number("msg-param-sender-count").ok()
-                },
+                // .ok(): this seems to be missing if the sender is twitch (user-id=12826) or minecraft (user-id=112568845) on special events
+                sender_total_gifts: source.try_get_number("msg-param-sender-count").ok(),
                 sub_plan: source
                     .try_get_nonempty_tag_value("msg-param-sub-plan")?
                     .to_owned(),
@@ -473,6 +474,13 @@ impl TryFrom<IRCMessage> for UserNoticeMessage {
                     .to_owned(),
             },
 
+            // announcement
+            // created in chat using /announcement, just a highlighted message that remains sticky in web chat
+            // msg-param-color - If set, typically one of the values PRIMARY, BLUE, GREEN, ORANGE, PURPLE
+            "announcement" => UserNoticeEvent::Announcement {
+                color: source.tags.0.get("msg-param-color").cloned(),
+            },
+
             // there are more events that are just not documented and not implemented yet. see above.
             _ => UserNoticeEvent::Unknown,
         };
@@ -489,7 +497,7 @@ impl TryFrom<IRCMessage> for UserNoticeMessage {
             channel_id: source.try_get_nonempty_tag_value("room-id")?.to_owned(),
             sender,
             message_text,
-            system_message: source.try_get_nonempty_tag_value("system-msg")?.to_owned(),
+            system_message: source.try_get_tag_value("system-msg")?.to_owned(),
             event,
             event_id,
             badge_info: source.try_get_badges("badge-info")?,
@@ -811,6 +819,22 @@ mod tests {
     }
 
     #[test]
+    pub fn test_submysterygift_minecraft_missing_count() {
+        let src = "@msg-param-goal-target-contributions=250;flags=;id=f7680f1f-3b0d-4ae8-9277-a9e167aff73f;msg-id=submysterygift;msg-param-gift-match-bonus-count=1;user-type=;msg-param-community-gift-id=7208403839702094653;msg-param-gift-match-gifter-display-name=TinoVlog;msg-param-origin-id=7208403839702094653;msg-param-mass-gift-count=1;vip=0;msg-param-goal-contribution-type=SUBS;badges=sub-gifter/1;msg-param-gift-match=bonus;emotes=;display-name=Minecraft;msg-param-goal-current-contributions=226;mod=0;system-msg=We\\sadded\\s1\\sGift\\sSubs\\sto\\sTinoVlog's\\sgift!;msg-param-gift-match-extra-count=0;badge-info=;room-id=160310560;tmi-sent-ts=1790366910855;user-id=112568845;msg-param-goal-user-contributions=1;msg-param-sub-plan=1000;subscriber=0;login=minecraft;color=#008000 :tmi.twitch.tv USERNOTICE #uzunaa";
+        let irc_message = IRCMessage::parse(src).unwrap();
+        let msg = UserNoticeMessage::try_from(irc_message).unwrap();
+
+        assert_eq!(
+            msg.event,
+            UserNoticeEvent::SubMysteryGift {
+                mass_gift_count: 1,
+                sender_total_gifts: None,
+                sub_plan: "1000".to_owned(),
+            }
+        );
+    }
+
+    #[test]
     pub fn test_submysterygift_ananonymousgifter() {
         let src = "@badge-info=;badges=;color=;display-name=AnAnonymousGifter;emotes=;flags=;id=8db97752-3dee-460b-9001-e925d0e2ba5b;login=ananonymousgifter;mod=0;msg-id=submysterygift;msg-param-mass-gift-count=10;msg-param-origin-id=13\\s33\\sed\\sc0\\sef\\sa0\\s7b\\s9b\\s48\\s59\\scb\\scc\\se4\\s39\\s7b\\s90\\sf9\\s54\\s75\\s66;msg-param-sub-plan=1000;room-id=71092938;subscriber=0;system-msg=An\\sanonymous\\suser\\sis\\sgifting\\s10\\sTier\\s1\\sSubs\\sto\\sxQcOW's\\scommunity!;tmi-sent-ts=1585447099603;user-id=274598607;user-type= :tmi.twitch.tv USERNOTICE #xqcow";
         let irc_message = IRCMessage::parse(src).unwrap();
@@ -979,6 +1003,25 @@ mod tests {
                     code: " :".to_owned(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    pub fn test_announcement() {
+        let src = r"@badge-info=subscriber/88;badges=moderator/1,subscriber/72;color=#19E6E6;display-name=randers;emotes=185989:11-15/25:17-21/1902:23-27;flags=;id=9045a344-75b9-44fa-af49-c413bcb39559;login=randers;mod=1;msg-id=announcement;msg-param-color=PRIMARY;room-id=11148817;subscriber=1;system-msg=;tmi-sent-ts=1780872797175;user-id=40286300;user-type=mod;vip=0 :tmi.twitch.tv USERNOTICE #pajlada :hello pajs pajaH Kappa Keepo";
+
+        let irc_message = IRCMessage::parse(src).unwrap();
+        let msg = UserNoticeMessage::try_from(irc_message).unwrap();
+
+        assert_eq!(
+            msg.message_text,
+            Some("hello pajs pajaH Kappa Keepo".to_owned())
+        );
+        assert_eq!(
+            msg.event,
+            UserNoticeEvent::Announcement {
+                color: Some("PRIMARY".to_owned())
+            }
         );
     }
 }

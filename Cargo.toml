@@ -6,10 +6,10 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["macros", "rt", "net", "io-util", "time", "sync"] }
-twitch-irc = { path = "twitch-irc_local", default-features = false, features = ["transport-tcp-rustls-webpki-roots"] }
+twitch-irc = { path = "twitch-irc_local", default-features = false, features = ["transport-tcp-rustls-webpki-roots"] } #6.1.3
 anyhow = "1"
 owo-colors = "4"
-rustyline = "18"
+rustyline = "19"
 notify-rust = "4"
 rand = "0.10.1"
 

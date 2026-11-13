@@ -89,7 +89,7 @@ impl Completer for CommandCompleter {
     fn complete(
         &self,
         line: &str,
-        pos: usize,
+        _pos: usize,
         _ctx: &Context<'_>,
     ) -> Result<(usize, Vec<Pair>), rustyline::error::ReadlineError> {
         let (start, matches) = self.dynamic_complete(line);
