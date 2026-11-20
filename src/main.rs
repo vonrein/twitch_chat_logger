@@ -139,6 +139,200 @@ static LOG_DIRECTORY: Lazy<String> = Lazy::new(|| {
         }
 });
 
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct AuthConfig {
+    #[allow(dead_code)]
+    username: Option<String>,
+    token: String,
+}
+
+#[derive(Deserialize)]
+struct ValidateResponse {
+    client_id: String,
+}
+
+#[derive(Deserialize)]
+struct StreamData {
+    title: String,
+}
+
+#[derive(Deserialize)]
+struct StreamsResponse {
+    data: Vec<StreamData>,
+}
+
+#[derive(Deserialize)]
+struct UserData {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct UsersResponse {
+    data: Vec<UserData>,
+}
+
+#[derive(Deserialize)]
+struct ChannelData {
+    title: String,
+}
+
+#[derive(Deserialize)]
+struct ChannelsResponse {
+    data: Vec<ChannelData>,
+}
+
+fn fetch_stream_title(channel_login: &str) -> Result<String, String> {
+    let mut config_path = home::home_dir()
+        .ok_or_else(|| "Unable to find home directory.".to_string())?;
+    config_path.push(".rustTwitchLogger/config.json");
+
+    let content = read_to_string(&config_path)
+        .map_err(|e| format!("Failed to read {}: {}", config_path.display(), e))?;
+
+    let auth: AuthConfig = serde_json::from_str(&content)
+        .map_err(|e| format!("Invalid JSON in config.json: {}", e))?;
+
+    let raw_token = auth.token.trim().strip_prefix("oauth:").unwrap_or(auth.token.trim());
+    if raw_token.is_empty() {
+        return Err("Token is empty in config.json".to_string());
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    // 1. Validate OAuth token to dynamically get the associated Client-ID
+    let validate_res = client
+        .get("https://id.twitch.tv/oauth2/validate")
+        .header("Authorization", format!("OAuth {}", raw_token))
+        .send()
+        .map_err(|e| format!("Failed to reach Twitch auth server: {}", e))?;
+
+    if !validate_res.status().is_success() {
+        return Err(format!("Invalid or expired token (HTTP {})", validate_res.status()));
+    }
+
+    let val_data: ValidateResponse = validate_res
+        .json()
+        .map_err(|e| format!("Failed to parse token validation response: {}", e))?;
+
+    // 2. Check live streams first (helix/streams)
+    let streams_url = format!("https://api.twitch.tv/helix/streams?user_login={}", channel_login);
+    let streams_res = client
+        .get(&streams_url)
+        .header("Client-ID", &val_data.client_id)
+        .header("Authorization", format!("Bearer {}", raw_token))
+        .send()
+        .map_err(|e| format!("Failed to query live stream info: {}", e))?;
+
+    if streams_res.status().is_success() {
+        if let Ok(streams_data) = streams_res.json::<StreamsResponse>() {
+            if let Some(stream) = streams_data.data.first() {
+                if !stream.title.trim().is_empty() {
+                    return Ok(stream.title.clone());
+                }
+            }
+        }
+    }
+
+    // 3. Fallback: If offline, fetch broadcaster_id -> channel title (helix/channels)
+    let users_url = format!("https://api.twitch.tv/helix/users?login={}", channel_login);
+    let users_res = client
+        .get(&users_url)
+        .header("Client-ID", &val_data.client_id)
+        .header("Authorization", format!("Bearer {}", raw_token))
+        .send()
+        .map_err(|e| format!("Failed to query user info: {}", e))?;
+
+    if !users_res.status().is_success() {
+        return Err(format!("Twitch API error looking up user (HTTP {})", users_res.status()));
+    }
+
+    let users_data: UsersResponse = users_res
+        .json()
+        .map_err(|e| format!("Failed to parse user response: {}", e))?;
+
+    let user = users_data
+        .data
+        .first()
+        .ok_or_else(|| format!("Channel '{}' not found on Twitch.", channel_login))?;
+
+    let channels_url = format!("https://api.twitch.tv/helix/channels?broadcaster_id={}", user.id);
+    let channels_res = client
+        .get(&channels_url)
+        .header("Client-ID", &val_data.client_id)
+        .header("Authorization", format!("Bearer {}", raw_token))
+        .send()
+        .map_err(|e| format!("Failed to query channel info: {}", e))?;
+
+    if !channels_res.status().is_success() {
+        return Err(format!("Twitch API error looking up channel (HTTP {})", channels_res.status()));
+    }
+
+    let channels_data: ChannelsResponse = channels_res
+        .json()
+        .map_err(|e| format!("Failed to parse channel response: {}", e))?;
+
+    let channel_info = channels_data
+        .data
+        .first()
+        .ok_or_else(|| format!("No channel info found for '{}'.", channel_login))?;
+
+    if channel_info.title.trim().is_empty() {
+        return Err(format!("Channel '{}' currently has an empty title.", channel_login));
+    }
+
+    Ok(channel_info.title.clone())
+}
+
+fn update_channel_title_auto(channel: &str, titles_map: &Arc<Mutex<HashMap<String, String>>>) {
+    let chan_owned = channel.to_string();
+    let titles_clone = Arc::clone(titles_map);
+
+    std::thread::spawn(move || {
+        match fetch_stream_title(&chan_owned) {
+            Ok(title) => {
+                titles_clone.lock().unwrap().insert(chan_owned.clone(), title.clone());
+                println!(
+                    "\n✅ Auto-set title for '{}' to: {}",
+                    chan_owned.cyan(),
+                    title.green()
+                );
+            }
+            Err(err) => {
+                eprintln!(
+                    "\n⚠️ Could not auto-fetch title for '{}' ({}). Using default file name.",
+                    chan_owned.yellow(),
+                    err.red()
+                );
+            }
+        }
+        print!(">> ");
+        let _ = io::stdout().flush();
+    });
+}
+
+/// Replaces spaces and filesystem-unsafe characters (like `/` or `:`) in stream titles with `_`
+fn sanitize_for_filename(input: &str) -> String {
+    input
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | ' ' | '\t' | '\n' | '\r' => '_',
+            _ => c,
+        })
+        .collect::<String>()
+        .split('_')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("_")
+}
+
+
+
+
 // --- Command-Line Argument Parser ---
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -215,7 +409,7 @@ struct NotificationState {
 // --- Main Application Logic ---
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    println!("last update: 09.11.26");
+    println!("last update: 19.11.26");
 
     use tokio::sync::oneshot;
     let cli = Cli::parse();
@@ -288,6 +482,7 @@ async fn main() -> Result<()> {
     for channel in &initial_channels {
         client.join(channel.clone())?;
         println!("Joined initial channel: {}", channel.green());
+        update_channel_title_auto(channel, &channel_titles);
     }
 
     // --- Message Handling Task ---
@@ -592,10 +787,10 @@ async fn main() -> Result<()> {
                                 if let Some(channel) = arg {
                                     let _ = client_for_thread.join(channel.clone());
                                     channels_for_thread.lock().unwrap().push(channel.clone());
-                                    // Add this line to enable message logging by default for the new channel
                                     msg_logging_for_thread.lock().unwrap().insert(channel.clone());
                                     get_or_assign_channel_color(&channel);
                                     println!("Joined {}", channel.green());
+                                    update_channel_title_auto(&channel, &titles_for_thread);
                                 }
                             },
                             "PART" => {
@@ -696,26 +891,32 @@ async fn main() -> Result<()> {
                             },
                             "TITLE" => {
                                 if parts.len() < 3 {
-                                    println!("Usage: TITLE <channel> <stream title...>");
+                                    println!("Usage: TITLE <channel> <stream title | auto>");
                                     continue;
                                 }
                                 let channel_to_title = parts[1].to_string();
                                 let stream_title = parts[2..].join(" ");
 
-                                // Optional: Check if we are even in that channel
+                                // Check if we are in that channel
                                 let joined_channels = channels_for_thread.lock().unwrap();
                                 if !joined_channels.iter().any(|c| c.eq_ignore_ascii_case(&channel_to_title)) {
                                     println!("⚠️ You are not in channel '{}'. Title not set.", channel_to_title.red());
                                     continue;
                                 }
+                                drop(joined_channels); // Release lock before fetching/updating
 
-                                let mut titles = titles_for_thread.lock().unwrap();
-                                titles.insert(channel_to_title.clone(), stream_title.clone());
-                                println!(
-                                    "Set title for '{}' to: {}",
-                                    channel_to_title.cyan(),
-                                    stream_title.green()
-                                );
+                                if stream_title.eq_ignore_ascii_case("auto") {
+                                    println!("Fetching current stream title for '{}'...", channel_to_title.cyan());
+                                    update_channel_title_auto(&channel_to_title, &titles_for_thread);
+                                } else {
+                                    let mut titles = titles_for_thread.lock().unwrap();
+                                    titles.insert(channel_to_title.clone(), stream_title.clone());
+                                    println!(
+                                        "Set title for '{}' to: {}",
+                                        channel_to_title.cyan(),
+                                        stream_title.green()
+                                    );
+                                }
                             },
                             "SAVE" => {
                                 if parts.len() >= 2 {
@@ -1124,8 +1325,12 @@ fn save_logs(
             let timestamp_for_save = format!("{}_{}", *STARTUP_DATE, time_part);
 
             let file_name = if let Some(name) = name_to_use {
-                let sanitized_name = name.replace(' ', "_");
-                format!("{}_{}_{}.txt", chan, sanitized_name, timestamp_for_save)
+                let sanitized_name = sanitize_for_filename(name);
+                if sanitized_name.is_empty() {
+                    format!("{}_msgs_{}.txt", chan, timestamp_for_save)
+                } else {
+                    format!("{}_{}_msgs_{}.txt", chan, sanitized_name, timestamp_for_save)
+                }
             } else {
                 format!("{}_msgs_{}.txt", chan, timestamp_for_save)
             };
@@ -1232,6 +1437,7 @@ fn save_logs(
                                 if badge_line.contains("partner/") { roles.insert("partner"); }
                                 if badge_line.contains("mod/")     { roles.insert("mod"); }
                                 if badge_line.contains("founder/") { roles.insert("founder"); }
+                                if badge_line.contains("ambassador/") { roles.insert("ambassador"); }
 
                                 if roles.is_empty() {
                                     seen_vips.remove(&key);
@@ -1267,22 +1473,33 @@ fn save_logs(
             };
 
             let vips_display = if seen_vips.is_empty() {
-                "None".to_string()
-            } else {
-                seen_vips
-                    .iter()
-                    .map(|(user, roles)| {
-						let display_name = if roles.contains("custom") {
-                user.to_uppercase()
-            } else {
-                user.clone()
-            };
-                        let role_list: Vec<&str> = roles.iter().copied().collect();
-                        format!("{} ({})", display_name, role_list.join(", "))
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
+				"None".to_string()
+			} else {
+				let mut formatted: Vec<(bool, String, String)> = seen_vips
+				.iter()
+				.map(|(user, roles)| {
+					let is_upper = roles.contains("config") || roles.contains("join");
+					let display_name = if is_upper {
+						user.to_uppercase()
+					} else {
+						user.clone()
+					};
+					let role_list: Vec<&str> = roles.iter().copied().collect();
+					let entry = format!("{} ({})", display_name, role_list.join(", "));
+					(is_upper, display_name, entry)
+				})
+				.collect();
+
+			// `b.0.cmp(&a.0)` puts `true` (uppercase/config) first, `false` (regular) second,
+			// then sorts alphabetically within each group (so `123user` stays in the second group).
+			formatted.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+
+			formatted
+				.into_iter()
+				.map(|(_, _, entry)| entry)
+				.collect::<Vec<_>>()
+				.join(", ")
+		};
 
             let msg_counts: Vec<usize> = sorted_stats.iter().map(|(_, count)| *count).collect();
             let avg_per_chatter = if !msg_counts.is_empty() {
